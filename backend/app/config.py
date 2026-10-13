@@ -56,6 +56,12 @@ class Settings(BaseSettings):
     # Hosts verified as Mastodon servers are cached for this long when saving source settings.
     instance_validation_cache_seconds: int = 6 * 3600
 
+    # YouTube Data API v3 key (secret, optional). Without it the YouTube source reports "not configured".
+    youtube_api_key: SecretStr | None = None
+
+    def youtube_key(self) -> str:
+        return self.youtube_api_key.get_secret_value().strip() if self.youtube_api_key else ""
+
     def mastodon_tokens(self) -> dict[str, str]:
         raw = self.mastodon_access_tokens.get_secret_value() if self.mastodon_access_tokens else ""
         out: dict[str, str] = {}
@@ -64,6 +70,11 @@ class Settings(BaseSettings):
             if sep and host.strip() and token.strip():
                 out[host.strip().lower()] = token.strip()
         return out
+
+    # Rate limiter backend: "database" (shared by every API replica) or "memory" (single process).
+    rate_limit_backend: str = "database"
+    # Bearer token for GET /api/metrics (Prometheus). Unset = the endpoint returns 404.
+    metrics_token: SecretStr | None = None
 
     # Auth rate limits (attempts per window per IP+identifier)
     auth_rate_limit_attempts: int = 10

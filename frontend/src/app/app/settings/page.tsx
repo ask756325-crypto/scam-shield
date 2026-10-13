@@ -8,9 +8,12 @@ import { api } from "@/lib/api";
 import { dateTime, GROUP_LABELS, relTime } from "@/lib/format";
 import { useApi } from "@/lib/hooks";
 import { DataTab, MonitoringTab, SessionsCard } from "@/components/app/settings-sections";
+import { AccuracyPanel } from "@/components/app/accuracy-panel";
+import { NotificationsTab } from "@/components/app/notifications-tab";
+import { AuditLogTab, TwoFactorCard } from "@/components/app/security-sections";
 
-type Tab = "account" | "organization" | "monitoring" | "data" | "detection";
-const TABS: Tab[] = ["account", "organization", "monitoring", "data", "detection"];
+type Tab = "account" | "organization" | "notifications" | "monitoring" | "data" | "detection" | "audit";
+const TABS: Tab[] = ["account", "organization", "notifications", "monitoring", "data", "detection", "audit"];
 
 interface DetectionCfg {
   groups: Record<string, { signals: string[]; weight: number; threshold: number; label: string; kinds?: string[] }>;
@@ -344,16 +347,18 @@ export default function SettingsPage() {
             options={[
               { value: "account", label: "Account" },
               { value: "organization", label: "Organization" },
+              { value: "notifications", label: "Notifications" },
               { value: "monitoring", label: "Monitoring" },
               { value: "data", label: "Data" },
               { value: "detection", label: "Detection" },
+              ...(owner ? [{ value: "audit" as Tab, label: "Audit log" }] : []),
             ]}
           />
         }
       />
       {tab === "account" ? (
-        <div className="space-y-4"><AccountTab /><SessionsCard /></div>
-      ) : tab === "organization" ? <OrgTab /> : tab === "monitoring" ? <MonitoringTab owner={owner} /> : tab === "data" ? <DataTab owner={owner} /> : <DetectionTab />}
+        <div className="space-y-4"><AccountTab /><TwoFactorCard /><SessionsCard /></div>
+      ) : tab === "organization" ? <OrgTab /> : tab === "notifications" ? <NotificationsTab owner={owner} /> : tab === "monitoring" ? <MonitoringTab owner={owner} /> : tab === "data" ? <DataTab owner={owner} /> : tab === "audit" && owner ? <AuditLogTab /> : <div className="space-y-4"><AccuracyPanel /><DetectionTab /></div>}
     </div>
   );
 }

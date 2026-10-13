@@ -53,7 +53,8 @@ def _fresh_rate_limits():
 class TestRegistry:
     def test_fresh_org_reports_not_tested_never_invented(self, authed):
         reg = registry(authed)
-        assert set(reg) == {"bluesky", "mastodon", "apple_app_store", "google_play", "demo"}
+        assert set(reg) == {"bluesky", "mastodon", "apple_app_store", "google_play", "youtube", "ct_domains", "demo"}
+        assert reg["youtube"]["state"] == reg["ct_domains"]["state"] == "disabled"  # opt-in sources
         for name in ("bluesky", "mastodon", "apple_app_store", "google_play"):
             s = reg[name]
             assert s["state"] == "live" and s["health"] == "not_tested" and s["enabled"]

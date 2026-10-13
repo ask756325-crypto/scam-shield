@@ -3,7 +3,9 @@ from __future__ import annotations
 import io
 import secrets
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+import httpx
+from pydantic import BaseModel, Field
+from fastapi import APIRouter, Query, Depends, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from PIL import Image
 from sqlalchemy import func, select
@@ -11,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from ..config import get_settings
 from ..db import get_db
+from ..services import audit as audit_log
 from ..demo.assets import asset_path
 from ..demo.dataset import DEMO_BRAND
 from ..deps import Principal, get_brand_for, get_principal
@@ -67,8 +70,61 @@ def create_brand(body: BrandIn, p: Principal = Depends(get_principal), db: Sessi
     brand = Brand(organization_id=p.org.id)
     _apply(brand, body)
     db.add(brand)
+    db.flush()
+    audit_log.record(db, p, "brand.created", "brand", brand.id, f"Created brand {brand.name}")
     db.commit()
     return brand_out(brand, _stats(db, brand))
+
+
+class AutofillIn(BaseModel):
+    url: str = Field(min_length=4, max_length=500)
+
+
+@router.post("/autofill")
+async def autofill_from_website(body: AutofillIn, p: Principal = Depends(get_principal), db: Session = Depends(get_db)):
+    """Draft a brand profile from a public website. Nothing is saved: the analyst reviews the draft first."""
+    from ..netsafe import UnsafeURL
+    from ..security import rate_limiter
+    from ..services.autofill import autofill
+
+    ok, retry = rate_limiter.hit(f"autofill:{p.user.id}", 10, 300)
+    if not ok:
+        raise HTTPException(429, f"Too many autofill requests. Try again in {int(retry) + 1} seconds.")
+    country = (p.org.source_config or {}).get("store_country", "us")
+    try:
+        draft = await autofill(body.url, country)
+    except UnsafeURL as e:
+        raise HTTPException(422, str(e))
+    except (httpx.HTTPError, ValueError):
+        raise HTTPException(422, "The website could not be read. Check the address and try again.")
+    audit_log.record(db, p, "brand.autofill", "brand", None, f"Autofill draft from {draft['source_url'][:200]}",
+                     {"found": draft["found"], "missing": draft["missing"]})
+    db.commit()
+    return draft
+
+
+@router.get("/preview-variants")
+def preview_variants(name: str, aliases: list[str] | None = Query(None), p: Principal = Depends(get_principal)):
+    """Before a first scan: the search terms ScamShield will use, and illustrative look-alikes with whether the
+    detection engine's name matching would flag each for review. Examples are generated, not observed."""
+    from ..detection.scoring import DEFAULT_CONFIG
+    from ..detection.similarity import name_similarity
+    from ..detection.variants import example_lookalikes, generate_search_terms
+
+    name = name.strip()[:120]
+    if len(name) < 2:
+        raise HTTPException(422, "Enter a brand name of at least 2 characters")
+    names = [name, *[a.strip()[:120] for a in (aliases or []) if a.strip()]][:10]
+    threshold = DEFAULT_CONFIG["relevance"]["identity_min"]
+    examples = []
+    for ex in example_lookalikes(name):
+        text = ex["text"].lstrip("@")
+        if ex["kind"] == "domain":
+            text = text.rsplit(".", 1)[0].replace("-", " ").replace(".", " ")
+        score = name_similarity(text, names).score
+        examples.append({**ex, "similarity": round(score, 2), "flagged": score >= threshold})
+    return {"search_terms": generate_search_terms(name, names[1:]), "examples": examples, "relevance_threshold": threshold,
+            "note": "Illustrative examples generated from the name — not accounts that exist. Scans search the enabled sources for real ones."}
 
 
 @router.get("/{brand_id}")
@@ -84,6 +140,8 @@ def update_brand(brand_id: int, body: BrandIn, p: Principal = Depends(get_princi
     if dup:
         raise HTTPException(409, "A brand with this name already exists")
     _apply(b, body)
+    audit_log.record(db, p, "brand.updated", "brand", b.id, f"Updated brand profile {b.name}",
+                     {"official_accounts": len(body.official_accounts), "official_apps": len(body.official_apps), "official_domains": body.official_domains})
     db.commit()
     return brand_out(b, _stats(db, b))
 
@@ -94,6 +152,7 @@ def delete_brand(brand_id: int, p: Principal = Depends(get_principal), db: Sessi
     if scanner.active_scan(db, b.id):
         raise HTTPException(409, "A scan is running for this brand. Wait for it to finish.")
     _remove_logo_file(b)
+    audit_log.record(db, p, "brand.deleted", "brand", b.id, f"Deleted brand {b.name} and all its scans and findings")
     db.delete(b)
     db.commit()
     return {"ok": True}

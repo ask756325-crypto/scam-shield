@@ -244,7 +244,7 @@ class DecisionIn(BaseModel):
     @field_validator("action")
     @classmethod
     def _action(cls, v: str) -> str:
-        if v not in {"confirm", "mark_safe", "escalate", "reopen", "note"}:
+        if v not in {"confirm", "mark_safe", "escalate", "reopen", "note", "assign"}:
             raise ValueError("Invalid action")
         return v
 

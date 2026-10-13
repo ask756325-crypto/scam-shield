@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from ..config import get_settings
 from ..db import get_db
+from ..services import audit as audit_log
 from ..deps import Principal, get_principal, require_owner
 from ..models import Organization, SourceCheck
 from ..netsafe import UnsafeURL, resolve_public
@@ -97,8 +98,10 @@ async def update_config(body: SourceConfigIn, p: Principal = Depends(require_own
         for host in added:
             await verify_mastodon_instance(host)
     cfg = dict(org.source_config or {})
+    before = {k: current[k] for k in ("enabled_sources", "mastodon_instances", "store_country")}
     cfg.update(new_cfg)
     org.source_config = cfg
+    audit_log.record(db, p, "sources.config_updated", "organization", org.id, "Source settings changed", {"before": before, "after": new_cfg})
     db.commit()
     return registry.source_config(org)
 

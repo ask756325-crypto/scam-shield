@@ -113,6 +113,18 @@ def schedule_tick(now: datetime | None = None, runner: str | None = None) -> lis
         _beat(db, now, runner, {"due": len(due), "started": len(created)})
         db.commit()
         _apply_retention_daily(db, now)
+    try:
+        from .notifications import send_due_digests
+
+        send_due_digests(now)
+    except Exception:
+        log.exception("digest run failed")
+    try:
+        from ..security import DatabaseRateLimiter
+
+        DatabaseRateLimiter.purge_older_than(24 * 3600)  # rate-limit windows are at most minutes long
+    except Exception:
+        log.exception("rate-limit cleanup failed")
     return created
 
 
@@ -177,11 +189,13 @@ def _run_due(db: Session, s: MonitoringSchedule, now: datetime, runner: str, bus
     return scan.id
 
 
-def record_outcome(db: Session, scan: Scan, now: datetime | None = None) -> None:
-    """Called when a scheduled scan finishes: success resets failures; failures back off and may auto-pause."""
+def record_outcome(db: Session, scan: Scan, now: datetime | None = None) -> bool:
+    """Called when a scheduled scan finishes: success resets failures; failures back off and may auto-pause.
+    Returns True if this outcome paused the schedule."""
     s = db.get(MonitoringSchedule, scan.schedule_id) if scan.schedule_id else None
     if not s or s.last_scan_id not in (None, scan.id):
-        return
+        return False
+    paused = False
     now = now or utcnow()
     s.last_outcome = scan.status
     if scan.status == "failed":
@@ -193,22 +207,30 @@ def record_outcome(db: Session, scan: Scan, now: datetime | None = None) -> None
         if s.consecutive_failures >= AUTO_PAUSE_AFTER_FAILURES and s.state == "active":
             s.state = "paused"
             s.paused_reason = f"Paused automatically after {s.consecutive_failures} consecutive failed scans. Check source health, then resume."
+            paused = True
     else:
         s.consecutive_failures = 0
         failed = [ss.source for ss in scan.sources if ss.status in ("failed", "partial")]
         s.last_error = f"Incomplete sources: {', '.join(failed)}" if failed else None
     s.version += 1
+    return paused
 
 
 def on_scan_finished(scan_id: int) -> None:
+    paused_schedule = None
     try:
         with SessionLocal() as db:
             scan = db.get(Scan, scan_id)
             if scan and scan.schedule_id:
-                record_outcome(db, scan)
+                if record_outcome(db, scan):
+                    paused_schedule = scan.schedule_id
                 db.commit()
     except Exception:
         log.exception("could not record schedule outcome for scan %s", scan_id)
+    if paused_schedule:
+        from .notifications import notify_schedule_paused
+
+        notify_schedule_paused(paused_schedule)
 
 
 def scheduler_status(db: Session) -> dict:

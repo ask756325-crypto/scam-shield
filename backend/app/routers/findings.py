@@ -4,12 +4,14 @@ import csv
 import io
 from datetime import datetime, timedelta, timezone
 
+from pydantic import BaseModel, Field
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from sqlalchemy import case, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from ..db import get_db
+from ..services import audit as audit_log
 from ..deps import Principal, get_finding_for, get_principal
 from ..models import Brand, Candidate, Decision, Finding
 from ..schemas import DecisionIn
@@ -32,7 +34,7 @@ SORTS = {
 }
 
 
-def _query(p: Principal, brand_id, level, status, source, kind, change_state, source_type, q, since_days=None, detection_type=None):
+def _query(p: Principal, brand_id, level, status, source, kind, change_state, source_type, q, since_days=None, detection_type=None, assignee=None):
     stmt = (
         select(Finding, Brand.name)
         .join(Brand, Finding.brand_id == Brand.id)
@@ -59,6 +61,15 @@ def _query(p: Principal, brand_id, level, status, source, kind, change_state, so
         stmt = stmt.where(or_(*conds))
     if detection_type:
         stmt = stmt.where(Finding.detection_type.in_(detection_type))
+    if assignee:
+        if assignee == "me":
+            stmt = stmt.where(Finding.assignee_id == p.user.id)
+        elif assignee == "unassigned":
+            stmt = stmt.where(Finding.assignee_id.is_(None))
+        elif assignee.isdigit():
+            stmt = stmt.where(Finding.assignee_id == int(assignee))
+        else:
+            raise HTTPException(422, "assignee must be me, unassigned or a user id")
     if since_days:
         if since_days not in (1, 7, 30, 90):
             raise HTTPException(422, "since_days must be 1, 7, 30 or 90")
@@ -81,6 +92,7 @@ def list_findings(
     q: str | None = None,
     since_days: int | None = None,
     detection_type: list[str] | None = Query(None),
+    assignee: str | None = None,
     include_signals: bool = False,
     sort: str = "risk",
     order: str = "desc",
@@ -89,7 +101,7 @@ def list_findings(
     p: Principal = Depends(get_principal),
     db: Session = Depends(get_db),
 ):
-    stmt = _query(p, brand_id, level, status, source, kind, change_state, source_type, q, since_days, detection_type)
+    stmt = _query(p, brand_id, level, status, source, kind, change_state, source_type, q, since_days, detection_type, assignee)
     total = db.scalar(select(func.count()).select_from(stmt.subquery()))
     if sort in ("risk", "level"):
         # Severity level first (critical requires extra evidence, so raw score alone can mis-order), then score.
@@ -151,6 +163,8 @@ def export_csv(
             c.url, "; ".join(f.corroborating_groups or []), f.explanation, c.first_observed_at.isoformat(), c.last_observed_at.isoformat(),
         ]])
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M")
+    audit_log.record(db, p, "data.exported", "findings", None, f"Exported {len(rows)} finding(s) as CSV", {"brand_id": brand_id})
+    db.commit()
     return StreamingResponse(
         iter([buf.getvalue()]),
         media_type="text/csv; charset=utf-8",
@@ -223,6 +237,8 @@ def report(finding_id: int, format: str = "html", p: Principal = Depends(get_pri
     data = evidence.report_data(db, f, p.org.name, p.user.name)
     name = f"scamshield-evidence-finding-{f.id}.{format}"
     headers = {"Content-Disposition": f'attachment; filename="{name}"', "Cache-Control": "no-store"}
+    audit_log.record(db, p, "data.exported", "finding", f.id, f"Evidence report ({format}) for “{f.candidate.name}”")
+    db.commit()
     if format == "json":
         return JSONResponse(data, headers=headers)
     return HTMLResponse(evidence.report_html(data), headers=headers)
@@ -237,22 +253,104 @@ TRANSITIONS = {
 }
 
 
+def _member_user(db: Session, p: Principal, user_id: int):
+    from ..models import Membership, User
+
+    m = db.scalar(select(Membership).where(Membership.user_id == user_id, Membership.organization_id == p.org.id))
+    if not m:
+        raise ValueError("Assignee is not a member of this organization")
+    return db.get(User, user_id)
+
+
+def apply_decision(db: Session, p: Principal, f: Finding, action: str, note: str, assignee_id: int | None = None) -> None:
+    """One review action on one finding, with the same rules for single and bulk requests. Raises ValueError (409)."""
+    note = note.strip()
+    before = f.status
+    after = before
+    if action == "note":
+        if not note:
+            raise ValueError("A note cannot be empty")
+    elif action == "assign":
+        if assignee_id is None:
+            f.assignee_id = None
+            note = note or "Unassigned"
+        else:
+            user = _member_user(db, p, assignee_id)
+            f.assignee_id = user.id
+            note = note or f"Assigned to {user.name}"
+    else:
+        after, allowed = TRANSITIONS[action]
+        if before not in allowed:
+            raise ValueError(f"Cannot {action.replace('_', ' ')} a finding that is {evidence.STATUS_LABELS.get(before, before).lower()}")
+        f.status = after
+    f.decisions.append(Decision(user_id=p.user.id, action=action, note=note, from_status=before, to_status=after))
+    f.updated_at = datetime.now(timezone.utc)
+
+
 @router.post("/{finding_id}/decision")
 def decide(finding_id: int, body: DecisionIn, p: Principal = Depends(get_principal), db: Session = Depends(get_db)):
     f = get_finding_for(db, p, finding_id)
-    note = body.note.strip()
-    before = f.status
-    if body.action == "note":
-        if not note:
-            raise HTTPException(422, "A note cannot be empty")
-        after = before
-    else:
-        after, allowed = TRANSITIONS[body.action]
-        if before not in allowed:
-            raise HTTPException(409, f"Cannot {body.action.replace('_', ' ')} a finding that is {evidence.STATUS_LABELS.get(before, before).lower()}")
-        f.status = after
-    f.decisions.append(Decision(user_id=p.user.id, action=body.action, note=note, from_status=before, to_status=after))
-    f.updated_at = datetime.now(timezone.utc)
+    if body.action == "assign":
+        raise HTTPException(422, "Use PATCH /api/findings/{id}/assignee to assign")
+    try:
+        apply_decision(db, p, f, body.action, body.note)
+    except ValueError as e:
+        raise HTTPException(422 if "empty" in str(e) else 409, str(e))
     db.commit()
     db.refresh(f)
     return finding_out(f, db.get(Brand, f.brand_id).name, detail=True)
+
+
+class AssigneeIn(BaseModel):
+    user_id: int | None = None
+
+
+@router.patch("/{finding_id}/assignee")
+def assign(finding_id: int, body: AssigneeIn, p: Principal = Depends(get_principal), db: Session = Depends(get_db)):
+    f = get_finding_for(db, p, finding_id)
+    try:
+        apply_decision(db, p, f, "assign", "", body.user_id)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    db.commit()
+    db.refresh(f)
+    return finding_out(f, db.get(Brand, f.brand_id).name, detail=True)
+
+
+class BulkIn(BaseModel):
+    ids: list[int] = Field(min_length=1, max_length=200)
+    action: str
+    note: str = Field(default="", max_length=2000)
+    assignee_id: int | None = None
+
+
+@router.post("/bulk")
+def bulk(body: BulkIn, p: Principal = Depends(get_principal), db: Session = Depends(get_db)):
+    """Apply one action to many findings. Each finding is checked on its own; one invalid item never blocks the rest.
+    Findings outside the caller's organization are reported as not found (their existence is not revealed)."""
+    if body.action not in {"confirm", "mark_safe", "escalate", "reopen", "note", "assign"}:
+        raise HTTPException(422, "Unknown action")
+    if body.action == "note" and not body.note.strip():
+        raise HTTPException(422, "A note cannot be empty")
+    if body.action == "assign" and body.assignee_id is not None:
+        try:
+            _member_user(db, p, body.assignee_id)
+        except ValueError as e:
+            raise HTTPException(422, str(e))
+    ids = list(dict.fromkeys(body.ids))
+    found = {f.id: f for f in db.scalars(select(Finding).join(Brand, Finding.brand_id == Brand.id)
+                                          .where(Finding.id.in_(ids), Brand.organization_id == p.org.id)).all()}
+    results = []
+    for fid in ids:
+        f = found.get(fid)
+        if f is None:
+            results.append({"id": fid, "ok": False, "error": "Finding not found"})
+            continue
+        try:
+            apply_decision(db, p, f, body.action, body.note, body.assignee_id)
+            results.append({"id": fid, "ok": True, "status": f.status})
+        except ValueError as e:
+            results.append({"id": fid, "ok": False, "error": str(e)})
+    db.commit()
+    ok = sum(1 for r in results if r["ok"])
+    return {"applied": ok, "failed": len(results) - ok, "results": results}

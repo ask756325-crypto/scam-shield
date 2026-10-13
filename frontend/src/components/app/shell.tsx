@@ -1,6 +1,9 @@
 "use client";
 
 import {
+  Gavel,
+  Network,
+  Globe,
   Activity,
   AppWindow,
   Building2,
@@ -22,7 +25,7 @@ import {
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { api } from "@/lib/api";
+import { api, beginSignOut } from "@/lib/api";
 import { sourceLabel } from "@/lib/format";
 import { useApi } from "@/lib/hooks";
 import type { Scan, SourceHealth } from "@/lib/types";
@@ -39,6 +42,7 @@ const NAV: { section: string; items: { href: string; label: string; icon: typeof
       { href: "/app", label: "Overview", icon: LayoutDashboard },
       { href: "/app/social", label: "Social Monitoring", icon: Users },
       { href: "/app/apps", label: "App Store Monitoring", icon: AppWindow },
+      { href: "/app/domains", label: "Domain Monitoring", icon: Globe },
     ],
   },
   {
@@ -46,7 +50,9 @@ const NAV: { section: string; items: { href: string; label: string; icon: typeof
     items: [
       { href: "/app/review", label: "Review Queue", icon: ClipboardCheck, badge: "review" },
       { href: "/app/investigations", label: "Investigations", icon: ScanSearch },
+      { href: "/app/campaigns", label: "Campaigns", icon: Network },
       { href: "/app/scans", label: "Scan History", icon: History },
+      { href: "/app/takedowns", label: "Takedowns", icon: Gavel },
     ],
   },
   {
@@ -266,6 +272,7 @@ function UserMenu() {
         title="Sign out"
         className="rounded p-1.5 text-ink-400 hover:bg-ink-800 hover:text-ink-100"
         onClick={async () => {
+          beginSignOut();
           await api("/auth/logout", { method: "POST" }).catch(() => {});
           window.location.replace("/signin?signedout=1"); // full reload drops all in-memory app state
         }}

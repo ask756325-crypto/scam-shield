@@ -6,6 +6,8 @@ import { api, ApiError } from "@/lib/api";
 import { relTime } from "@/lib/format";
 import type { Brand, OfficialAccount, OfficialApp } from "@/lib/types";
 import { useToast } from "../toast";
+import { WebsiteAutofill } from "./website-autofill";
+import { LookalikePreview } from "./lookalike-preview";
 import { Button, Card, CardHeader, Field, Input, Select, TagInput, Textarea } from "../ui";
 
 // ---------------------------------------------------------------- payload
@@ -288,6 +290,15 @@ export function BrandForm({
           </div>
         )}
 
+        <div className="lg:col-span-2">
+          <WebsiteAutofill
+            current={p}
+            onApply={(patch) => setP((x) => ({ ...x, ...patch }))}
+            onLogo={(file) => onPendingLogo?.(file)}
+            hasLogo={!!pendingLogo || !!brand?.has_logo}
+          />
+        </div>
+
         <Section id="identity" title="Name & aliases" description="The names the detector compares candidates against. Only the brand name is required.">
           <div className="grid gap-4 p-4 md:grid-cols-2">
             <Field label="Brand name" htmlFor="name" error={fe.name}>
@@ -297,6 +308,7 @@ export function BrandForm({
               <TagInput id="aliases" value={p.aliases} onChange={(v) => set("aliases", v)} placeholder="Type and press Enter" max={20} />
             </Field>
           </div>
+          <LookalikePreview name={p.name} aliases={p.aliases} />
         </Section>
 
         <Section id="logo" title="Official logo" description="Compared with candidate avatars and app icons using perceptual hashes (pHash + dHash).">

@@ -4,6 +4,7 @@ The same pipeline processes live, simulated and imported records.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 
 from ..candidate import CandidateRecord
@@ -78,6 +79,9 @@ def evaluate(
     desc_signals = description_similarities(brand.corpus + official_docs, [r.description for r in to_score], brand.names)
     for r, desc in zip(to_score, desc_signals):
         key = record_key(r)
+        if r.kind == "domain":
+            results.append(EvaluatedCandidate(r, None, assess(_domain_signals(r, brand), "domain", cfg)))
+            continue
         signals = [name_similarity(r.name, brand.names), desc]
         if r.kind == "account":
             signals.append(handle_similarity(r.handle, brand.names, r.source))
@@ -91,6 +95,22 @@ def evaluate(
         signals.append(publisher_signal(r, brand.official_apps, brand.names))
         results.append(EvaluatedCandidate(r, None, assess(signals, r.kind, cfg)))
     return results
+
+
+def _domain_signals(r: CandidateRecord, brand: BrandContext) -> list:
+    """A hostname has no logo or description: identity (the hostname as words), the URL itself, and scam wording in it."""
+    from .signals import Signal
+
+    host = (r.external_id or "").lower()
+    words = re.sub(r"[.\-_]+", " ", host.rsplit(".", 1)[0])  # drop the TLD, split labels into words
+    return [
+        name_similarity(words, brand.names),
+        url_signal([f"https://{host}"], brand.official_domains, brand.names),
+        scam_signal(words),
+        Signal.missing("logo", "Not applicable to domains"),
+        Signal.missing("description", "Not applicable to domains"),
+        Signal.missing("publisher", "Not applicable to domains"),
+    ]
 
 
 def store_app_id(r: CandidateRecord) -> str:

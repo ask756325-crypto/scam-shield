@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from ..config import get_settings
 from ..db import get_db
 from ..deps import Principal, client_ip, get_principal
-from ..models import AuthSession, EmailVerification, Membership, Organization, PasswordReset, User
+from ..models import AuthSession, EmailVerification, LoginChallenge, Membership, Organization, PasswordReset, User
 from ..schemas import ChangePasswordIn, LoginIn, ProfileIn, ResetConfirmIn, ResetRequestIn, SignupIn, VerifyEmailIn
 from ..security import (
     create_session,
@@ -121,6 +121,13 @@ def login(body: LoginIn, request: Request, response: Response, db: Session = Dep
     valid = verify_password(body.password, user.password_hash if user else None)
     if not user or not valid or not user.is_active:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Incorrect email or password.")
+    if user.totp_enabled_at:
+        # Password is correct but no session yet: the second factor completes the login.
+        challenge = secrets.token_urlsafe(32)
+        db.add(LoginChallenge(user_id=user.id, token_hash=token_hash(challenge), remember=body.remember,
+                              expires_at=datetime.now(timezone.utc) + timedelta(minutes=5)))
+        db.commit()
+        return {"two_factor_required": True, "challenge": challenge}
     token = create_session(db, user, request.headers.get("user-agent"), remember=body.remember)
     _set_cookie(response, token, remember=body.remember)
     return _session_payload(db, user)
@@ -258,3 +265,143 @@ def logout_others(p: Principal = Depends(get_principal), db: Session = Depends(g
     before = db.scalar(select(func.count()).select_from(AuthSession).where(AuthSession.user_id == p.user.id)) or 0
     revoke_all_sessions(db, p.user.id, except_token=p.token)
     return {"ok": True, "revoked": max(before - 1, 0)}
+
+
+# ---------------------------------------------------------------- two-factor authentication (TOTP)
+
+from pydantic import BaseModel, Field  # noqa: E402
+
+from .. import totp  # noqa: E402
+from ..services import audit as audit_log  # noqa: E402
+
+MAX_CHALLENGE_ATTEMPTS = 5
+
+
+class SecondFactorIn(BaseModel):
+    challenge: str = Field(min_length=10, max_length=200)
+    code: str = Field(default="", max_length=20)
+    recovery_code: str = Field(default="", max_length=40)
+
+
+class PasswordIn(BaseModel):
+    password: str = Field(min_length=1, max_length=256)
+
+
+class CodeIn(BaseModel):
+    code: str = Field(min_length=1, max_length=20)
+
+
+class DisableIn(BaseModel):
+    password: str = Field(min_length=1, max_length=256)
+    code: str = Field(default="", max_length=40)  # a TOTP code or a recovery code
+
+
+def _check_second_factor(db: Session, user: User, code: str, recovery_code: str = "") -> str | None:
+    """Return "totp" or "recovery" when valid (and consume it), else None."""
+    if code:
+        step = totp.verify(user.totp_secret or "", code, user.totp_last_step)
+        if step is not None:
+            user.totp_last_step = step
+            return "totp"
+    rc = recovery_code or (code if len(code.strip()) > 6 else "")
+    if rc:
+        h = totp.hash_recovery(rc)
+        codes = list(user.recovery_codes or [])
+        if h in codes:
+            codes.remove(h)
+            user.recovery_codes = codes
+            return "recovery"
+    return None
+
+
+@router.post("/login/2fa")
+def login_second_factor(body: SecondFactorIn, request: Request, response: Response, db: Session = Depends(get_db)):
+    _limit(f"2fa-ip:{client_ip(request)}")
+    ch = db.scalar(select(LoginChallenge).where(LoginChallenge.token_hash == token_hash(body.challenge)))
+    if not ch or ch.expires_at < datetime.now(timezone.utc) or ch.attempts >= MAX_CHALLENGE_ATTEMPTS:
+        raise HTTPException(401, "This sign-in attempt expired. Sign in again.")
+    user = db.get(User, ch.user_id)
+    ch.attempts += 1
+    used = _check_second_factor(db, user, body.code, body.recovery_code) if user and user.is_active and user.totp_enabled_at else None
+    if not used:
+        db.commit()
+        left = MAX_CHALLENGE_ATTEMPTS - ch.attempts
+        raise HTTPException(401, "Incorrect code." + (f" {left} attempt{'s' if left != 1 else ''} left." if left > 0 else " Sign in again."))
+    remember = ch.remember
+    db.delete(ch)
+    db.commit()
+    token = create_session(db, user, request.headers.get("user-agent"), remember=remember)
+    _set_cookie(response, token, remember=remember)
+    out = _session_payload(db, user)
+    if used == "recovery":
+        out["recovery_codes_left"] = len(user.recovery_codes or [])
+    return out
+
+
+@router.get("/2fa")
+def two_factor_status(p: Principal = Depends(get_principal)):
+    u = p.user
+    return {"enabled": u.totp_enabled_at is not None, "enabled_at": u.totp_enabled_at.isoformat() if u.totp_enabled_at else None,
+            "recovery_codes_left": len(u.recovery_codes or []) if u.totp_enabled_at else 0, "setup_pending": bool(u.totp_pending_secret)}
+
+
+@router.post("/2fa/setup")
+def two_factor_setup(body: PasswordIn, p: Principal = Depends(get_principal), db: Session = Depends(get_db)):
+    """Start setup (re-authenticates with the password). The secret is shown once, until confirmed with a code."""
+    _limit(f"2fa-setup:{p.user.id}")
+    user = db.get(User, p.user.id)
+    if not verify_password(body.password, user.password_hash):
+        raise HTTPException(400, "Password is incorrect.")
+    if user.totp_enabled_at:
+        raise HTTPException(409, "Two-factor authentication is already on. Turn it off first to set up a new device.")
+    secret = totp.new_secret()
+    user.totp_pending_secret = secret
+    db.commit()
+    return {"secret": secret, "otpauth_uri": totp.provisioning_uri(secret, user.email)}
+
+
+@router.post("/2fa/enable")
+def two_factor_enable(body: CodeIn, p: Principal = Depends(get_principal), db: Session = Depends(get_db)):
+    _limit(f"2fa-enable:{p.user.id}")
+    user = db.get(User, p.user.id)
+    if not user.totp_pending_secret:
+        raise HTTPException(409, "Start setup first.")
+    step = totp.verify(user.totp_pending_secret, body.code)
+    if step is None:
+        raise HTTPException(400, "That code doesn't match. Check the time on your device and try again.")
+    codes = totp.new_recovery_codes()
+    user.totp_secret, user.totp_pending_secret = user.totp_pending_secret, None
+    user.totp_enabled_at, user.totp_last_step = datetime.now(timezone.utc), step
+    user.recovery_codes = [totp.hash_recovery(c) for c in codes]
+    audit_log.record(db, p, "security.2fa_enabled", "user", user.id, f"{user.email} turned on two-factor authentication")
+    db.commit()
+    revoke_all_sessions(db, user.id, except_token=p.token)
+    return {"enabled": True, "recovery_codes": codes}
+
+
+@router.post("/2fa/disable")
+def two_factor_disable(body: DisableIn, p: Principal = Depends(get_principal), db: Session = Depends(get_db)):
+    _limit(f"2fa-disable:{p.user.id}")
+    user = db.get(User, p.user.id)
+    if not user.totp_enabled_at:
+        raise HTTPException(409, "Two-factor authentication is not on.")
+    if not verify_password(body.password, user.password_hash) or not _check_second_factor(db, user, body.code):
+        raise HTTPException(400, "Password or code is incorrect.")
+    user.totp_secret = user.totp_pending_secret = None
+    user.totp_enabled_at, user.totp_last_step, user.recovery_codes = None, None, None
+    audit_log.record(db, p, "security.2fa_disabled", "user", user.id, f"{user.email} turned off two-factor authentication")
+    db.commit()
+    return {"enabled": False}
+
+
+@router.post("/2fa/recovery-codes")
+def regenerate_recovery_codes(body: CodeIn, p: Principal = Depends(get_principal), db: Session = Depends(get_db)):
+    _limit(f"2fa-codes:{p.user.id}")
+    user = db.get(User, p.user.id)
+    if not user.totp_enabled_at or not _check_second_factor(db, user, body.code):
+        raise HTTPException(400, "Enter a current code from your authenticator app.")
+    codes = totp.new_recovery_codes()
+    user.recovery_codes = [totp.hash_recovery(c) for c in codes]
+    audit_log.record(db, p, "security.recovery_codes_regenerated", "user", user.id, f"{user.email} generated new recovery codes")
+    db.commit()
+    return {"recovery_codes": codes}

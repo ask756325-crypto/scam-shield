@@ -119,4 +119,75 @@ class RateLimiter:
             self._hits.clear()
 
 
-rate_limiter = RateLimiter()
+class DatabaseRateLimiter:
+    """Sliding window stored in the database, so every API replica shares the same counts.
+
+    Best effort under heavy concurrency (two simultaneous requests can both pass at the boundary), which is
+    acceptable for brute-force protection. Keys are SHA-256 hashed so emails and IPs are never stored."""
+
+    def hit(self, key: str, limit: int, window: float) -> tuple[bool, float]:
+        from sqlalchemy import delete as sa_delete, func as sa_func, select as sa_select
+
+        from .db import SessionLocal
+        from .models import RateLimitEvent
+
+        now = time.time()
+        kh = hashlib.sha256(key.encode()).hexdigest()
+        with SessionLocal() as db:
+            db.execute(sa_delete(RateLimitEvent).where(RateLimitEvent.key_hash == kh, RateLimitEvent.at <= now - window))
+            count, oldest = db.execute(sa_select(sa_func.count(), sa_func.min(RateLimitEvent.at)).where(RateLimitEvent.key_hash == kh)).one()
+            if count >= limit:
+                db.commit()
+                return False, max(0.0, (oldest or now) + window - now)
+            db.add(RateLimitEvent(key_hash=kh, at=now))
+            db.commit()
+            return True, 0.0
+
+    def reset(self) -> None:
+        from sqlalchemy import delete as sa_delete
+
+        from .db import SessionLocal
+        from .models import RateLimitEvent
+
+        with SessionLocal() as db:
+            db.execute(sa_delete(RateLimitEvent))
+            db.commit()
+
+    @staticmethod
+    def purge_older_than(seconds: float) -> int:
+        from sqlalchemy import delete as sa_delete
+
+        from .db import SessionLocal
+        from .models import RateLimitEvent
+
+        with SessionLocal() as db:
+            n = db.execute(sa_delete(RateLimitEvent).where(RateLimitEvent.at < time.time() - seconds)).rowcount
+            db.commit()
+            return n or 0
+
+
+class _RateLimiterProxy:
+    """Chooses the backend from settings at call time (database by default)."""
+
+    def __init__(self):
+        self._memory = RateLimiter()
+        self._database = DatabaseRateLimiter()
+
+    @property
+    def backend(self):
+        from .config import get_settings
+
+        return self._memory if get_settings().rate_limit_backend == "memory" else self._database
+
+    def hit(self, key: str, limit: int, window: float) -> tuple[bool, float]:
+        return self.backend.hit(key, limit, window)
+
+    def reset(self) -> None:
+        self._memory.reset()
+        try:
+            self._database.reset()
+        except Exception:  # tables may not exist yet in pure unit tests
+            pass
+
+
+rate_limiter = _RateLimiterProxy()

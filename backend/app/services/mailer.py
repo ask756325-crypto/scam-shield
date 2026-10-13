@@ -55,3 +55,26 @@ def send_invite(to: str, org_name: str, link: str) -> None:
     _deliver(to, f"You are invited to {org_name} on ScamShield AI",
              f"You have been invited to join {org_name}. Create your account within 7 days:\n\n{link}\n",
              "Invitation", link)
+
+
+def send_notification(to: str, subject: str, body: str) -> str:
+    """Alert email. Returns the real outcome: sent | logged (development, no SMTP) | skipped (no SMTP)."""
+    s = get_settings()
+    mode = delivery_mode()
+    if mode == "email":
+        msg = EmailMessage()
+        msg["Subject"] = subject
+        msg["From"] = s.smtp_from
+        msg["To"] = to
+        msg.set_content(body)
+        with smtplib.SMTP(s.smtp_host, s.smtp_port, timeout=15) as smtp:
+            smtp.starttls()
+            if s.smtp_user and s.smtp_password:
+                smtp.login(s.smtp_user, s.smtp_password)
+            smtp.send_message(msg)
+        return "sent"
+    if mode == "server_log":
+        log.warning("[DEV ONLY] notification for %s: %s", to, subject)
+        return "logged"
+    log.warning("notification email to %s not sent: no SMTP server is configured", to)
+    return "skipped"

@@ -172,6 +172,7 @@ def mark_interrupted_scans(runner: str | None = None) -> int:
 async def run_scan(scan_id: int) -> None:
     settings = get_settings()
     db = SessionLocal()
+    cancelled = False
     try:
         scan = db.get(Scan, scan_id)
         if not scan:
@@ -278,6 +279,11 @@ async def run_scan(scan_id: int) -> None:
         from .scheduler import on_scan_finished  # local import: scheduler imports this module
 
         on_scan_finished(scan_id)
+        if not cancelled:
+            from .notifications import notify_scan_finished
+
+            # Alerts (email/webhook) can block on network I/O: run them off the event loop.
+            await asyncio.to_thread(notify_scan_finished, scan_id)
 
 
 async def _collect(db: Session, ss: ScanSource, adapter: SourceAdapter, terms: list[str], client: httpx.AsyncClient, advance,
@@ -520,6 +526,9 @@ def _persist(db: Session, scan: Scan, brand: Brand, evaluated: list[EvaluatedCan
         seen_finding_ids.add(f.id)
 
     _apply_absence_rules(db, scan, brand, seen_finding_ids, now)
+    from .takedowns import verify_after_scan
+
+    verify_after_scan(db, scan)
     db.commit()
 
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { AppWindow, AtSign, Beaker, FileUp, Smartphone } from "lucide-react";
+import { AppWindow, AtSign, Beaker, FileUp, Globe, MonitorPlay, Smartphone } from "lucide-react";
 import { useState } from "react";
 import { avatarSrc, sourceLabel } from "@/lib/format";
 import type { ChangeState, FindingStatus, RiskLevel } from "@/lib/types";
@@ -97,6 +97,8 @@ export function PlatformGlyph({ platform, className }: { platform: string; class
   if (platform === "mastodon") return <AtSign className={c} aria-hidden />;
   if (platform === "apple" || platform === "apple_app_store") return <Smartphone className={c} aria-hidden />;
   if (platform === "google_play") return <AppWindow className={c} aria-hidden />;
+  if (platform === "youtube") return <MonitorPlay className={c} aria-hidden />;
+  if (platform === "domain" || platform === "ct_domains") return <Globe className={c} aria-hidden />;
   return <AtSign className={c} aria-hidden />;
 }
 

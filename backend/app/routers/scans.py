@@ -7,6 +7,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..db import get_db
+from ..services import audit as audit_log
 from ..deps import Principal, get_brand_for, get_principal, get_scan_for
 from ..models import Brand, Candidate, Finding, FindingChange, Scan, ScanSource
 from ..schemas import ScanIn
@@ -106,6 +107,8 @@ def export_scans(brand_id: int | None = None, p: Principal = Depends(get_princip
             s.findings_unverified or 0, s.error or "",
         ]])
     stamp = datetime.now().strftime("%Y%m%d-%H%M")
+    audit_log.record(db, p, "data.exported", "scans", None, "Exported scan history as CSV", {"brand_id": brand_id})
+    db.commit()
     return StreamingResponse(iter([buf.getvalue()]), media_type="text/csv; charset=utf-8",
                              headers={"Content-Disposition": f'attachment; filename="scamshield-scans-{stamp}.csv"'})
 

@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from ..config import get_settings
 from ..db import get_db
+from ..services import audit as audit_log
 from ..deps import Principal, client_ip, get_principal, require_owner
 from ..models import Invite, Membership, Organization, User
 from ..schemas import AcceptInviteIn, ChangeEmailIn, InviteIn, MemberRoleIn
@@ -116,6 +117,7 @@ def create_invite(body: InviteIn, p: Principal = Depends(require_owner), db: Ses
     token = secrets.token_urlsafe(32)
     inv = Invite(organization_id=p.org.id, email=email, role=body.role, token_hash=token_hash(token), created_by_id=p.user.id, expires_at=now + timedelta(days=INVITE_TTL_DAYS))
     db.add(inv)
+    audit_log.record(db, p, "team.invite_created", "invite", None, f"Invited {email} as {body.role}", {"email": email, "role": body.role})
     db.commit()
     link = f"{get_settings().frontend_origin}/accept-invite?token={token}"
     emailed = False
@@ -135,6 +137,7 @@ def revoke_invite(invite_id: int, p: Principal = Depends(require_owner), db: Ses
     if not inv:
         raise HTTPException(404, "Invite not found")
     inv.revoked_at = datetime.now(timezone.utc)
+    audit_log.record(db, p, "team.invite_revoked", "invite", inv.id, f"Revoked invite for {inv.email}")
     db.commit()
     return {"ok": True}
 
@@ -155,7 +158,9 @@ def set_member_role(user_id: int, body: MemberRoleIn, p: Principal = Depends(req
     m = _member(db, p, user_id)
     if m.role == "owner" and body.role != "owner" and _owner_count(db, p.org.id) <= 1:
         raise HTTPException(409, "An organization needs at least one owner.")
+    before = m.role
     m.role = body.role
+    audit_log.record(db, p, "team.role_changed", "user", user_id, f"{m.user.email}: {before} → {body.role}", {"before": before, "after": body.role})
     db.commit()
     return {"ok": True}
 
@@ -167,6 +172,7 @@ def remove_member(user_id: int, p: Principal = Depends(require_owner), db: Sessi
         raise HTTPException(409, "You cannot remove yourself.")
     user = db.get(User, user_id)
     revoke_all_sessions(db, user_id)
+    audit_log.record(db, p, "team.member_removed", "user", user_id, f"Removed {user.email} ({m.role})")
     db.delete(m)
     db.delete(user)  # accounts belong to exactly one organization
     db.commit()

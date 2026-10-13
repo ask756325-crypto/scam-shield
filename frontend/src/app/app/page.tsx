@@ -1,6 +1,6 @@
 "use client";
 
-import { Beaker, Building2, Radar } from "lucide-react";
+import { Beaker, Building2, FileText, Radar } from "lucide-react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useState } from "react";
 import { CandidatesChart } from "@/components/app/charts";
@@ -136,6 +136,11 @@ function Header({ d, range, setRange }: { d?: Dashboard; range: RangeValue; setR
       </div>
       <div className="flex flex-wrap items-center gap-2">
         <Segmented label="Date range" value={range} onChange={setRange} options={RANGES.map((r) => ({ value: r.value, label: r.label }))} />
+        <a href={`/api/reports/executive?days=${range === "all" ? 365 : range === "1" ? 7 : range}`} target="_blank" rel="noopener noreferrer"
+          className="inline-flex h-8 items-center gap-1.5 rounded-md border border-ink-200 bg-white px-2.5 text-[12.5px] font-medium text-ink-700 hover:border-ink-300"
+          title="Print-ready summary for the selected period (all brands)">
+          <FileText className="size-3.5" /> Executive report
+        </a>
         <ScanNow />
       </div>
     </div>

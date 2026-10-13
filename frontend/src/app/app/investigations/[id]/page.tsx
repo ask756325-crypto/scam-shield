@@ -6,6 +6,8 @@ import { useParams } from "next/navigation";
 import { useState } from "react";
 import { Avatar, ChangeBadge, PlatformGlyph, RiskBadge, ScoreMeter, SourceTypeBadge, StatusBadge } from "@/components/app/bits";
 import { useBrands } from "@/components/app/providers";
+import { TakedownCard } from "@/components/app/takedown-card";
+import { AssigneeControl } from "@/components/app/assignee-control";
 import { useToast } from "@/components/toast";
 import { Badge, Button, Card, CardHeader, Dialog, ErrorState, Kbd, Skeleton, Textarea, cx } from "@/components/ui";
 import { api } from "@/lib/api";
@@ -210,7 +212,8 @@ export default function FindingPage() {
   const urlScores = (sig.urls?.data?.per_url as Record<string, number> | undefined) ?? {};
   const synthetic = c.source_type === "simulated";
   // Synthetic records carry illustrative URLs that could collide with real profiles — never link them.
-  const externalUrl = synthetic ? undefined : safeHref(c.url);
+  // Look-alike domains may be live phishing sites: never render them as clickable links.
+  const externalUrl = synthetic || c.kind === "domain" ? undefined : safeHref(c.url);
   const allowed = ALLOWED[f.status] ?? [];
   const cmp = ev?.comparison;
   const pv = ev?.provenance;
@@ -242,6 +245,7 @@ export default function FindingPage() {
                 </a>
               )}
               {synthetic && <span className="text-med">Synthetic record — no real profile to open</span>}
+              {c.kind === "domain" && !synthetic && <span className="text-med">Not linked — the domain may host a phishing site</span>}
             </div>
             <div className="mt-3 flex flex-wrap items-center gap-2">
               <RiskBadge level={f.risk_level} score={f.risk_score} />
@@ -251,6 +255,7 @@ export default function FindingPage() {
           </div>
           <div className="flex flex-col items-end gap-2">
             <StatusBadge status={f.status} level={f.risk_level} />
+            <AssigneeControl f={f} onChange={(u) => setData({ ...f, ...u })} />
             <div className="flex flex-wrap justify-end gap-2">
               {allowed.includes("confirm") && <Button variant="primary" size="sm" icon={<ShieldX className="size-3.5" />} disabled={busy} onClick={() => setDialog("confirm")}>Confirm impersonation</Button>}
               {allowed.includes("mark_safe") && <Button size="sm" icon={<ShieldCheck className="size-3.5" />} disabled={busy} onClick={() => setDialog("mark_safe")}>Mark legitimate</Button>}
@@ -339,6 +344,8 @@ export default function FindingPage() {
         </div>
 
         <div className="min-w-0 space-y-4">
+          <TakedownCard findingId={f.id} findingStatus={f.status} synthetic={synthetic} />
+
           {/* ------------------------------------------------ comparison */}
           <Card>
             <CardHeader title="Compared with" description="Official assets from the brand profile" />

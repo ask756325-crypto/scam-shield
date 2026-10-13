@@ -15,6 +15,7 @@ test.describe("mobile layouts", () => {
   const pages = [
     "/", "/signin", "/signup", "/app", "/app/social", "/app/apps", "/app/brands", "/app/review", "/app/investigations", "/app/scans",
     "/app/sources", "/app/settings", "/app/settings?tab=monitoring", "/app/settings?tab=data", "/app/settings?tab=detection",
+    "/app/settings?tab=notifications", "/app/settings?tab=audit", "/app/domains", "/app/campaigns", "/app/takedowns",
     "BRAND", "BRAND?tab=monitoring", "SCAN", "FINDING",
   ];
   for (const path of pages) {

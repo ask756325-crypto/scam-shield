@@ -8,7 +8,7 @@ assets by exact identifier, scores what remains on independent evidence, and giv
 confirm, dismiss and track findings over time.
 
 ```
-frontend/  Next.js 15 · React 19 · TypeScript · Tailwind CSS v4 · Recharts      (port 3000)
+frontend/  Next.js 16 · React 19 · TypeScript · Tailwind CSS v4 · Recharts      (port 3000)
 backend/   FastAPI · SQLAlchemy 2 · RapidFuzz · Pillow/ImageHash · scikit-learn  (port 8000)
 ```
 
@@ -49,6 +49,15 @@ cd backend
 The seeded credentials are the `SEED_EMAIL` / `SEED_PASSWORD` values in `backend/.env.example`
 (local development only; the script refuses to run unless `SCAMSHIELD_ENV=development`).
 
+**Docker (written, not yet run — Docker was unavailable in development):**
+
+```bash
+cp .env.docker.example .env          # set POSTGRES_PASSWORD, PUBLIC_URL, SMTP_*, optional secrets
+docker compose up -d --build         # PostgreSQL + API (migrates at startup) + scheduler worker + frontend on :3000
+```
+
+Put an HTTPS reverse proxy in front: production cookies are `Secure`.
+
 Production build of the frontend: `npm run build && npm start` (set `BACKEND_URL` if FastAPI is not on
 `http://127.0.0.1:8000`).
 
@@ -80,6 +89,9 @@ Backend settings use the `SCAMSHIELD_` prefix and can be placed in `backend/.env
 | `SCAMSHIELD_SMTP_HOST`, `_PORT`, `_USER`, `_PASSWORD`, `_FROM` | unset | Password-reset email delivery |
 | `SCAMSHIELD_USER_AGENT` | ScamShieldAI/1.0 … | Sent to sources — set a real contact address in deployments |
 | `SCAMSHIELD_SOURCE_RETRY_DELAY_SECONDS` | `1.5` | Delay before the single retry of a query that timed out or hit a 5xx/network error |
+| `SCAMSHIELD_YOUTUBE_API_KEY` | unset | **Secret, optional.** YouTube Data API v3 key. Sent only to googleapis.com, in a request header, never in a URL. Without it the YouTube source reports "not configured" and cannot be enabled |
+| `SCAMSHIELD_RATE_LIMIT_BACKEND` | `database` | `database`: shared by every API replica, with hashed keys. `memory`: per process |
+| `SCAMSHIELD_METRICS_TOKEN` | unset | **Secret, optional.** Bearer token for `GET /api/metrics` (Prometheus text). The endpoint returns 404 while this is unset |
 | `SCAMSHIELD_MASTODON_ACCESS_TOKENS` | unset | **Secret, optional.** `instance=token,instance2=token2` (scope `read:search`). Each token is sent only to its own instance; never returned by the API, shown in the UI or logged |
 
 Frontend: `BACKEND_URL` (server-side only, default `http://127.0.0.1:8000`).
@@ -141,12 +153,38 @@ A finding counts as absent only when **its own source completed cleanly** in tha
 
 ## 3. Database
 
-* Tables are created automatically on startup (`Base.metadata.create_all`). There is no migration tool in
-  this version — for schema changes in a persistent deployment, add Alembic before upgrading.
-* **SQLite** (default) is what this build was developed and tested against.
-* **PostgreSQL** is supported through SQLAlchemy + `psycopg` (installed). Create a database and set
-  `SCAMSHIELD_DATABASE_URL`. *PostgreSQL was not available in the build environment, so it has not been
-  exercised end-to-end here.*
+* **Alembic migrations** (`backend/migrations/`, revision `0001` = baseline). The schema is brought up to date at startup:
+  * an empty database runs `alembic upgrade head`;
+  * an Alembic-managed database applies any pending revisions;
+  * a database created before Alembic gets its missing tables and columns added in place, and is then stamped `head`.
+
+  This upgrade path was verified on the existing development database, with all data kept. `tests/test_migrations.py`
+  fails if the models and migrations ever drift apart. To change the schema, edit the models, then:
+
+  ```bash
+  cd backend
+  .venv/Scripts/python -m alembic revision --autogenerate -m "describe the change"
+  ```
+
+  Review the generated file, then commit it.
+* **SQLite** (default) is used for development and the default test run.
+* **PostgreSQL 16** has been verified (2026-10-13, PostgreSQL 16.15). Create an empty database and set
+  `SCAMSHIELD_DATABASE_URL=postgresql+psycopg://user:pass@host:5432/dbname`. Verified on it:
+  * the full backend suite (228 passed, including 4 PostgreSQL-only checks);
+  * the 11 live-source tests, including the full release workflow;
+  * the additive migration path on an existing database;
+  * the partial unique index that blocks duplicate active scans.
+
+  Running the suite against PostgreSQL needs an **empty** database:
+
+  ```bash
+  SCAMSHIELD_TEST_DATABASE_URL=postgresql+psycopg://postgres@127.0.0.1:5432/scamshield_test .venv/Scripts/python -m pytest -q
+  ```
+
+  Testing on PostgreSQL found and fixed two time-zone bugs. On PostgreSQL, columns added by the migration step
+  used `timestamp without time zone`, so times were shifted by the server's UTC offset; affected columns are now
+  converted to `timestamptz` automatically on startup. Datetimes also came back in the database session's time
+  zone; all datetimes are now normalised to UTC.
 * All queries go through the SQLAlchemy ORM / expression API (parameterized).
 
 ---
@@ -159,7 +197,9 @@ A finding counts as absent only when **its own source completed cleanly** in tha
 | **Mastodon** | `GET /api/v2/search?type=accounts&limit=40` on configured instances (default `mastodon.social`). Unauthenticated: accounts only, no `resolve`/`offset` (never sent). 300 req / 5 min per IP, tracked via `X-RateLimit-*` | ✅ Live — verified 2026-10-13 (live test suite) |
 | **Apple App Store** | Apple's public iTunes Search API (`entity=software`), unauthenticated, documented by Apple. Apple asks for ~20 requests/minute; HTTP 403/429 is reported as *rate limited*. No developer-ID lookup is needed: results carry `artistId` and `bundleId` | ✅ Live — 140–146 candidates; one query timed out in one run and was reported as *partial*. Verified again 2026-10-13 (live app tests) |
 | **Google Play** | `google-play-scraper` (unofficial page parser) + detail lookups for developer IDs, on a dedicated 4-thread pool with a 10 s socket timeout and a 6 h developer-details cache. The library disables TLS verification process-wide at import; ScamShield undoes that and routes its requests through a verified (certifi) context | ⚠️ Works, but **unofficial**; Play-only scan ~31 s cold / ~8 s with warm cache (2026-10-13, was ~62 s with timeouts); some results lack a package ID and are skipped and counted |
-| X, Instagram, Facebook, TikTok | — | ❌ Not integrated (no permitted public search API without approved credentials). Shown as “not integrated” in the UI. |
+| **YouTube** | YouTube Data API v3 `search.list` (type=channel). Needs `SCAMSHIELD_YOUTUBE_API_KEY`. One search costs 100 of the default 10,000 daily quota units | ⚙️ Opt-in. Tested with mocked responses only: no API key was available, so it is **not verified live** |
+| **Look-alike domains** (Certificate Transparency) | crt.sh JSON search for hostnames containing the brand, from certificates issued in the last 120 days. Domains are analysed as text and never visited | ⚙️ Opt-in. Tested with mocked responses. **crt.sh returned HTTP 502 throughout testing on 2026-10-13**, so it is not verified live. The opt-in live test fails with that real error |
+| X, Instagram, Facebook, TikTok, Telegram | — | ❌ Not integrated: there is no permitted public search API without approved credentials (Telegram channel search needs a logged-in user session). Shown as “not integrated” in the UI. |
 | Synthetic demo | Bundled fictional dataset | Demo brand only, labelled **Simulated** everywhere |
 | CSV import | Analyst upload | Labelled **Imported** |
 
@@ -180,7 +220,7 @@ Every value comes from stored evidence: finished scan runs and recorded **connec
 
 Each query records an outcome — **Successful**, **No results**, **Rate limited**, **Timed out**, **Unavailable**, **Access denied / auth required** or **Error** — and each source run reports `ok`, `empty`, `partial` or `failed` with the dominant failure reason. A rate-limited or access-denied source stops querying instead of retrying blindly. A timeout or 5xx response is retried once after a short delay, within the source's time budget. Auth and other 4xx errors are not retried. With several Mastodon instances, one failing instance marks the source *partial* and is named, rather than silently dropped.
 
-Live verification (real network, opt-in): `SCAMSHIELD_LIVE_TESTS=1 .venv/Scripts/python -m pytest tests/test_live_sources.py` — real Bluesky and Mastodon queries, genuinely empty results, official-account exclusion on live data (`@bsky.app`, `@Mastodon@mastodon.social`), cross-instance de-duplication, an unreachable instance reported as unavailable, a Google Play query over verified TLS, an end-to-end live social scan, real App Store results run through the engine with the official PayPal app excluded by bundle ID, an end-to-end live App Store + Google Play scan, and the **full release workflow** (`test_release_end_to_end_workflow_live`): register → brand with official accounts and apps → live scan of all four sources → de-duplication → official exclusion → scoring → persisted evidence → review → CSV and evidence-report export → rescan and compare. All 11 passed on 2026-10-13. In the release run all four sources returned `ok`: 630 unique candidates, 7 official assets excluded, 159 findings (9 medium, 150 low, none high or critical for the brand's own fans and namesakes), and a second scan reported all 159 as recurring, with nothing resolved after one scan.
+Live verification (real network, opt-in): `SCAMSHIELD_LIVE_TESTS=1 .venv/Scripts/python -m pytest tests/test_live_sources.py` — real Bluesky and Mastodon queries, genuinely empty results, official-account exclusion on live data (`@bsky.app`, `@Mastodon@mastodon.social`), cross-instance de-duplication, an unreachable instance reported as unavailable, a Google Play query over verified TLS, an end-to-end live social scan, real App Store results run through the engine with the official PayPal app excluded by bundle ID, an end-to-end live App Store + Google Play scan, and the **full release workflow** (`test_release_end_to_end_workflow_live`): register → brand with official accounts and apps → live scan of all four sources → de-duplication → official exclusion → scoring → persisted evidence → review → CSV and evidence-report export → rescan and compare. All 11 passed on 2026-10-13, and again after the newest features were added. The 12th, `test_ct_domains_real_query`, fails with crt.sh's real outage (`ct_domains unavailable (HTTP 502)`) until that service is back. In the release run all four sources returned `ok`: 630 unique candidates, 7 official assets excluded, 159 findings (9 medium, 150 low, none high or critical for the brand's own fans and namesakes), and a second scan reported all 159 as recurring, with nothing resolved after one scan.
 
 Honesty rules enforced in code:
 * A failing source is marked failed/partial and **never** replaced with synthetic data.
@@ -250,6 +290,67 @@ Everything shown comes from stored records. Nothing is fetched or generated when
 
 ---
 
+### Detection accuracy (Settings → Detection)
+
+* **Analyst-labelled metrics** (`/api/evaluation`): ground truth is your analysts' decisions (*Confirmed* = impersonation,
+  *Marked legitimate* = not). It shows:
+  * precision, recall, F1 and the confusion matrix at each risk level;
+  * a sweep of minimum scores from 0 to 100, with the best-F1 threshold;
+  * per-source precision and recall at medium.
+
+  Fewer than 20 labels is flagged as anecdotal. Synthetic demo decisions are excluded. These numbers can be optimistic, because analysts see the score before deciding.
+* **Regression benchmark** (`app/evaluation/benchmark.py`): 26 hand-labelled synthetic cases run through the live engine.
+  * **What it contains:** impersonations, legitimate look-alikes, official assets, and hard cases. The hard cases are a quiet impersonator, a fan contest that uses giveaway wording, a reseller app that copies the brand's description, and a parody account.
+  * **Result at medium and above:** precision 0.83, recall 0.91. Official assets are always excluded.
+  * **Known trade-offs:** the fan contest and the reseller app are flagged (false alarms), and the quiet impersonator stays low (a miss).
+  * **As a guard:** `tests/test_evaluation.py` fails if precision drops below 0.8 or recall below 0.85.
+
+  It guards against regressions; it does not measure real-world accuracy.
+
+### Alerts (Settings → Notifications)
+
+* **Per-user email alerts:**
+  * new critical findings (on by default);
+  * new high findings (off by default);
+  * a source failing in two consecutive scans, or a schedule pausing itself;
+  * an optional daily digest at a chosen local hour and time zone.
+* **Organization webhook** (owners only): Slack-compatible JSON with a `text` field. The URL must be `https` and resolve to a public address, is stored server-side, and is only ever shown masked.
+* **Delivery log:** every attempt is recorded with its real outcome: `sent`, `logged` (development without SMTP), `skipped` (no SMTP) or `failed`. "Send test" reports the true result.
+
+### Takedowns (`/app/takedowns`, investigation page)
+
+For a **confirmed** finding, open a case. ScamShield generates an evidence-based report for that platform's own reporting route: the App Store dispute form, Google's legal removal form, in-app reporting on Bluesky and YouTube, the hosting instance's moderators on Mastodon, or Safe Browsing and the registrar for domains.
+* **Statuses:** draft → reported (needs a reference or note) → acknowledged → removed / rejected / withdrawn. Invalid transitions return `409`.
+* **Re-checks:** later scans record whether the account or listing is *still visible*, *no longer observed* (two clean misses), or *seen again after removal*.
+* **No automatic filing:** ScamShield never files or sends a report itself, and the UI asks analysts to check the reporting form is still current.
+
+### Bulk triage and assignment
+
+* **Bulk actions:** on Investigations, select findings and confirm, mark legitimate, send for further review, or assign/unassign them, up to 200 at a time. Each finding is checked on its own: an invalid item is reported without blocking the rest, and findings from other organizations come back as "not found".
+* **Assignment:** set the assignee on the investigation page or in bulk. Only organization members can be assigned. Filters: *Assigned to me* and *Unassigned* on Investigations and the Review Queue.
+
+### Possible campaigns (`/app/campaigns`)
+
+* **Grouping rule:** findings are clustered when they share one strong indicator (phone, email, messaging link, developer ID or full URL) or two weaker ones (a web domain plus a handle on another platform).
+* **Too-common values:** a value shared by more than 25 findings is ignored as meaningless.
+* **Labelling:** each cluster is shown as *Possible campaign* with the values its members share, and an explicit note that sharing a value does not prove common ownership.
+
+### Executive report and look-alike preview
+
+* **Executive report** (Dashboard → *Executive report*): a print-ready HTML summary for 7, 30, 90 or 365 days. Save it as PDF from the browser. It covers new findings by level with a weekly chart, confirmed vs legitimate, review backlog, median time to decision, scan reliability, takedown outcomes, analyst-labelled accuracy and source health. Synthetic data is excluded and counted separately.
+* **Look-alike preview** (brand form): shows the search terms that will be sent and illustrative look-alikes (homoglyphs, typos, added words, domains). Each example is marked with whether name matching alone would put it in review. These are generated examples, not observations.
+
+### Brand autofill from a website (Configure → Brand Profiles → New brand)
+
+Paste a brand's official website and press **Autofill**. ScamShield reads only the public page and fills the form with what the site itself declares:
+* the name (site name or title) and the description;
+* the website and its domains;
+* the logo, taken from the site icon or share image and checked as a real image (at least 32 px, 2 MB max);
+* linked social profiles (X, Bluesky, Mastodon via rel=me, Instagram, Facebook, YouTube, TikTok);
+* App Store and Google Play links. App Store listings are looked up with Apple's public lookup API for the bundle ID, developer and developer ID.
+
+It only fills empty fields and adds what it finds, and nothing is saved until you press Save. The result lists what was found and what was not, so nothing is guessed. Safety: https only, every redirect is re-checked to make sure it resolves to a public address, pages and images are size-limited, and requests are rate-limited (10 per 5 minutes per user). Each autofill is recorded in the audit log.
+
 ## 6. Security
 
 * **Auth:** built into the FastAPI backend (no third-party identity provider). Argon2id password hashing;
@@ -281,6 +382,21 @@ Everything shown comes from stored records. Nothing is fetched or generated when
   image content-type check. Profile links are never fetched.
 * **CSV export** neutralizes spreadsheet formula injection. Every export (findings, scan history, review audit trail) is
   scoped to the caller's organization.
+* **Two-factor authentication (TOTP, RFC 6238, standard library):**
+  * setup re-checks the password, and the secret is shown only once;
+  * after a correct password, login returns a 5-minute, single-use challenge limited to 5 attempts, with no session until a valid code is given;
+  * codes can't be replayed;
+  * 10 recovery codes are stored hashed and work once each;
+  * turning 2FA off needs the password and a code.
+
+  The TOTP secret is stored server-side in plain form (`cryptography` isn't installed and isn't hand-rolled), so protect database access accordingly.
+* **Audit log** (Settings → Audit log, owners only, CSV export): who changed source settings, schedules, roles and invites, brands, detection or monitoring settings, the webhook, retention, takedowns or 2FA, and who exported data. Each event records the actor, IP and time. Secrets are never written to it.
+* **Request IDs:** every response carries `X-Request-ID` (a well-formed upstream ID is honoured), and log lines include it. Unhandled errors return `500` with the request ID and no internal details.
+* **Secrets in logs:** a log filter redacts configured secrets (Mastodon tokens, YouTube key, SMTP password) from every record. A test caught httpx logging full request URLs, which is why the YouTube key is sent in a header.
+* **Health and metrics:**
+  * `GET /api/health` is liveness;
+  * `GET /api/health/ready` checks the database and returns 503 if it's unreachable;
+  * `GET /api/metrics` (with `SCAMSHIELD_METRICS_TOKEN`) serves Prometheus counters and latency histograms per route template (never raw IDs), plus scans, open findings, failed notifications and scheduler heartbeat age.
 * **Release security audit** (`tests/test_security_audit.py`) runs automatically against the full route table:
   * every route that takes an ID, called as another organization, returns 403, 404, 405 or 422 and never leaks data;
   * every collection endpoint excludes other organizations' records;
@@ -329,7 +445,7 @@ Privacy and retention assumptions are documented at `/privacy`; acceptable use a
 cd backend && .venv/Scripts/python -m pytest -q
 ```
 
-**224 passed, 11 live tests opt-in** (detection unit tests, source adapters with mocked HTTP, SSRF guards, auth & access control,
+**268 passed on SQLite, 12 live tests opt-in** (the PostgreSQL run of 228 passed predates the newest features; see section 9) (detection unit tests, source adapters with mocked HTTP, SSRF guards, auth & access control,
 cross-organization isolation, brand validation & persistence, logo upload validation, demo scan end-to-end,
 filtering/sorting, CSV export & injection guard, rescan comparisons new/changed/recurring/resolved,
 safe-finding auto-reopen, scheduler, CSV import, source-failure isolation, settings, app monitoring: package-ID signal,
@@ -354,7 +470,7 @@ UI verification was done in a real browser against the running stack (sign-up, o
 scans with live progress, investigations, decisions, review-queue keyboard triage, brand form, sources
 connection test, live PayPal scan).
 
-**End-to-end browser tests (Playwright, Chromium)** — 60 tests across desktop, tablet (768 px) and mobile (Pixel 7), passing on two consecutive full runs:
+**End-to-end browser tests (Playwright, Chromium)** — 74 tests across desktop, tablet (768 px) and mobile (Pixel 7), passing on two consecutive full runs:
 
 ```bash
 cd frontend
@@ -372,8 +488,8 @@ filters, app monitoring (official-vs-candidate comparison, signal breakdown, fil
 cross-organization isolation, scheduled monitoring (a weekly Asia/Tokyo schedule; pause, resume and disable; an honest
 "scheduler not running" notice), scan history filters, scan change details with field diffs and missing-vs-resolved, sources & integrations ("Not tested" honesty, disabling a source, inline config validation), review-queue filters and
 further review, monitoring settings with inline validation, sessions, data exports and retention, the public site, and
-responsive layouts: the mobile menu, and no horizontal overflow on 19 pages (every app page including brand, scan and
-investigation detail pages) at both tablet and mobile widths.
+responsive layouts: the mobile menu, and no horizontal overflow on 24 pages (every app page including brand, scan and
+investigation detail pages, plus domains, campaigns, takedowns, notifications and audit log) at both tablet and mobile widths; accuracy panel, notification preferences and an honest test send, audit log, takedown case lifecycle, bulk triage, campaigns, look-alike preview, and 2FA setup with two-step sign-in using real TOTP codes.
 
 ---
 
@@ -419,14 +535,26 @@ investigation detail pages) at both tablet and mobile widths.
 * Mastodon search covers only what the configured instances know about.
 * Logo comparison requires a brand logo; the live PayPal example above was scanned without one.
 * Team: invites are single-use 7-day links (emailed only if SMTP is configured) and accounts belong to one organization. Email verification is informational (it does not block sign-in).
-* The auth rate limiter is in-process (single API replica). Scheduling works across processes (worker plus database
-  claims), but there is no distributed task queue. Manual scans run in the API process that received them.
-* No Alembic migrations (additive startup migrations only); PostgreSQL untested here.
+* Rate limiting is shared through the database (best effort at the exact boundary under heavy concurrency). Scheduling
+  works across processes, but there is no distributed task queue: manual scans run in the API process that received them.
+* PostgreSQL 16 was verified on 2026-10-13, **before** Alembic and the features added afterwards (alerts, takedowns,
+  2FA, audit log, bulk actions, new sources). Those were tested on SQLite only. The PostgreSQL-specific tests are
+  in `tests/test_postgres.py`. Re-run the suite against PostgreSQL before deploying on it.
+* **Docker** (`backend/Dockerfile`, `frontend/Dockerfile`, `docker-compose.yml`, `.env.docker.example`) was written
+  but **never built or run**: Docker isn't installed in the development environment. The compose file was only
+  checked as valid YAML. Treat it as a starting point and test it before relying on it.
+* **Next.js 16.4.0** (upgraded from 15.3.2). Type check, production build and all 74 browser tests pass on it. `next lint` was
+  removed in Next 16, so linting now runs ESLint directly (`npm run lint`) with the native flat config. The newer React
+  rules in that config report **39 code-quality findings** (mostly "setState inside an effect") that have not been
+  refactored; they don't affect behaviour or the build.
+* YouTube and Certificate Transparency domains are not verified live (no API key; crt.sh was down). See section 4.
+* The TOTP secret is not encrypted at rest (see section 6).
 * Heuristic scores are not calibrated probabilities. Live verification used public brands; there is no labelled
   ground-truth dataset, so precision and recall are not measured.
 * Not production-ready by default. Production needs HTTPS, `SCAMSHIELD_ENV=production`, SMTP, a managed database
   with backups, a single scheduler worker, a shared rate-limit store if you run several API replicas, and a monitored
   process supervisor. See sections 2, 6 and "Scheduled monitoring".
-* A clean install from the package registries (`pip install`, `npm install`) was not repeated during the release audit,
-  because it needs new downloads. Pinned versions were checked offline against the installed environment, and a clean
-  start on an empty database was verified.
+* A clean install has been verified (2026-10-13), using a fresh `git clone`, a new virtualenv with `pip install -r requirements-dev.txt`
+  from PyPI, and `npm ci` from the lockfile. Backend tests, type check, lint, production build and the browser suite
+  passed from that checkout. On Windows, keep the checkout path short (for example `C:\src\scamshield`): scikit-learn's
+  deeply nested files exceed the 260-character path limit unless Windows long-path support is enabled.

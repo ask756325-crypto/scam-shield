@@ -23,8 +23,8 @@ from .signals import Signal
 DEFAULT_CONFIG: dict = {
     "groups": {
         "identity": {"signals": ["name", "handle", "package"], "weight": 0.30, "threshold": 0.70, "label": "Name / handle similarity"},
-        "visual": {"signals": ["logo"], "weight": 0.20, "threshold": 0.75, "label": "Logo similarity"},
-        "content": {"signals": ["description"], "weight": 0.12, "threshold": 0.30, "label": "Description similarity"},
+        "visual": {"signals": ["logo"], "weight": 0.20, "threshold": 0.75, "label": "Logo similarity", "kinds": ["account", "app"]},
+        "content": {"signals": ["description"], "weight": 0.12, "threshold": 0.30, "label": "Description similarity", "kinds": ["account", "app"]},
         "links": {"signals": ["urls"], "weight": 0.13, "threshold": 0.50, "label": "Suspicious links"},
         "behavior": {"signals": ["scam"], "weight": 0.15, "threshold": 0.40, "label": "Scam indicators"},
         "provenance": {"signals": ["publisher"], "weight": 0.10, "threshold": 0.75, "label": "Publisher mismatch", "kinds": ["app"]},
@@ -192,6 +192,8 @@ DETECTION_TYPES = {
     "suspicious_app": "Suspicious app listing",
     "lookalike_app": "Look-alike app",
     "official_publisher_app": "App from official publisher",
+    "phishing_domain": "Possible phishing domain",
+    "lookalike_domain": "Look-alike domain",
     "unrelated": "Unrelated",
 }
 
@@ -200,6 +202,9 @@ def detection_type(kind: str, relevant: bool, by_name: dict[str, Signal], corrob
     """What kind of impersonation the evidence suggests. Purely descriptive; risk level is decided separately."""
     if not relevant:
         return "unrelated"
+    if kind == "domain":
+        # A brand-bearing hostname always trips the link heuristics; "phishing" also needs scam/credential wording.
+        return "phishing_domain" if "behavior" in corroborating else "lookalike_domain"
     if kind == "app":
         if same_official_publisher:
             return "official_publisher_app"

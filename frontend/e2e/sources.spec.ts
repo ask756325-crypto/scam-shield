@@ -20,7 +20,7 @@ test.describe("sources & integrations", () => {
     await expect(gp.getByText("Disabled", { exact: true })).toBeVisible();
     await page.reload();
     await expect(page.getByRole("listitem").filter({ has: page.getByRole("heading", { name: "Google Play" }) }).getByText("Disabled", { exact: true })).toBeVisible();
-    await expect(page.getByRole("link", { name: /Source health/ }).getByText("Off")).toBeVisible(); // sidebar
+    await expect(page.getByRole("link", { name: /Source health/ }).getByRole("listitem").filter({ hasText: "Google Play" })).toContainText("Off"); // sidebar
 
     // Invalid configuration is rejected inline, nothing saved.
     await page.getByLabel("App store country").fill("zz");

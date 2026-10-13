@@ -46,12 +46,38 @@ def configure(url: str) -> None:
     SessionLocal.configure(bind=engine)
 
 
+BACKEND_DIR = Path(__file__).resolve().parent.parent
+
+
+def _alembic_config():
+    from alembic.config import Config
+
+    cfg = Config(str(BACKEND_DIR / "alembic.ini"))
+    cfg.set_main_option("script_location", str(BACKEND_DIR / "migrations"))
+    cfg.attributes["skip_logging"] = True  # keep the application's logging configuration
+    return cfg
+
+
 def init_db() -> None:
+    """Bring the database schema to the latest Alembic revision.
+
+    * empty database            → `alembic upgrade head` creates every table
+    * Alembic-managed database  → `alembic upgrade head` applies pending revisions
+    * pre-Alembic database      → create missing tables + additive columns/repairs, then `alembic stamp head`
+    """
+    from alembic import command
+    from sqlalchemy import inspect
+
     from . import models  # noqa: F401  (register models)
 
-    Base.metadata.create_all(bind=engine)
-    _add_missing_columns()
-    _ensure_active_scan_index()
+    tables = set(inspect(engine).get_table_names())
+    if "alembic_version" not in tables and tables & {"users", "organizations", "brands"}:
+        Base.metadata.create_all(bind=engine)
+        _add_missing_columns()
+        _ensure_active_scan_index()
+        command.stamp(_alembic_config(), "head")
+    else:
+        command.upgrade(_alembic_config(), "head")
 
 
 def _ensure_active_scan_index() -> None:
@@ -91,6 +117,13 @@ _ADDITIVE_COLUMNS = [
     ("scans", "runner", "VARCHAR(40) NULL"),
     ("scans", "heartbeat_at", "TIMESTAMP NULL"),
     ("findings", "missed_scans", "INTEGER NOT NULL DEFAULT 0"),
+    ("organizations", "notification_config", "JSON NULL"),
+    ("findings", "assignee_id", "INTEGER NULL REFERENCES users(id) ON DELETE SET NULL"),
+    ("users", "totp_secret", "VARCHAR(64) NULL"),
+    ("users", "totp_pending_secret", "VARCHAR(64) NULL"),
+    ("users", "totp_enabled_at", "TIMESTAMP NULL"),
+    ("users", "totp_last_step", "INTEGER NULL"),
+    ("users", "recovery_codes", "JSON NULL"),
 ]
 
 
@@ -98,10 +131,34 @@ def _add_missing_columns() -> None:
     from sqlalchemy import inspect, text
 
     insp = inspect(engine)
+    pg = engine.dialect.name == "postgresql"
     with engine.begin() as conn:
         for table, column, ddl in _ADDITIVE_COLUMNS:
+            if pg:
+                # Match TZDateTime (timestamptz). A plain TIMESTAMP column would store aware datetimes as
+                # session-local wall time and read back shifted by the server's UTC offset.
+                ddl = ddl.replace("TIMESTAMP NULL", "TIMESTAMP WITH TIME ZONE NULL")
             if table in insp.get_table_names() and column not in {c["name"] for c in insp.get_columns(table)}:
                 conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}"))
+        if pg:
+            _repair_pg_timestamp_columns(conn)
+
+
+def _repair_pg_timestamp_columns(conn) -> None:
+    """PostgreSQL databases migrated by earlier versions got `timestamp without time zone` for added columns.
+    Convert them to timestamptz, interpreting stored values in the session time zone that wrote them."""
+    from sqlalchemy import text
+
+    for table, column, ddl in _ADDITIVE_COLUMNS:
+        if not ddl.startswith("TIMESTAMP"):
+            continue
+        dtype = conn.execute(text(
+            "SELECT data_type FROM information_schema.columns WHERE table_schema = current_schema() "
+            "AND table_name = :t AND column_name = :c"), {"t": table, "c": column}).scalar()
+        if dtype == "timestamp without time zone":
+            conn.execute(text(
+                f"ALTER TABLE {table} ALTER COLUMN {column} TYPE TIMESTAMP WITH TIME ZONE "
+                f"USING {column} AT TIME ZONE current_setting('TimeZone')"))
 
 
 def get_db() -> Iterator[Session]:

@@ -1,0 +1,65 @@
+# ScamShield AI — single-host deployment: PostgreSQL, API, scheduler worker, frontend.
+# Put a TLS-terminating reverse proxy (Caddy, nginx, a cloud load balancer) in front of the frontend:
+# SCAMSHIELD_ENV=production issues Secure cookies, which browsers only send over HTTPS.
+# NOTE: not run in the development environment (Docker was unavailable there) — test before relying on it.
+#
+#   cp .env.docker.example .env      # then fill in real values
+#   docker compose up -d --build
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: scamshield
+      POSTGRES_USER: scamshield
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U scamshield -d scamshield"]
+      interval: 5s
+      retries: 20
+    restart: unless-stopped
+
+  api:
+    build: ./backend
+    environment: &backend_env
+      SCAMSHIELD_ENV: production
+      SCAMSHIELD_DATABASE_URL: postgresql+psycopg://scamshield:${POSTGRES_PASSWORD}@db:5432/scamshield
+      SCAMSHIELD_FRONTEND_ORIGIN: ${PUBLIC_URL:?set PUBLIC_URL in .env}
+      SCAMSHIELD_SCHEDULER_ENABLED: "false"   # the worker below runs the scheduler
+      SCAMSHIELD_USER_AGENT: ${SCAMSHIELD_USER_AGENT:-ScamShieldAI/1.0}
+      SCAMSHIELD_SMTP_HOST: ${SMTP_HOST:-}
+      SCAMSHIELD_SMTP_PORT: ${SMTP_PORT:-587}
+      SCAMSHIELD_SMTP_USER: ${SMTP_USER:-}
+      SCAMSHIELD_SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SCAMSHIELD_SMTP_FROM: ${SMTP_FROM:-}
+      SCAMSHIELD_MASTODON_ACCESS_TOKENS: ${MASTODON_ACCESS_TOKENS:-}
+      SCAMSHIELD_YOUTUBE_API_KEY: ${YOUTUBE_API_KEY:-}
+      SCAMSHIELD_METRICS_TOKEN: ${METRICS_TOKEN:-}
+    volumes: [uploads:/data/uploads]
+    depends_on:
+      db: {condition: service_healthy}
+    restart: unless-stopped
+
+  worker:
+    build: ./backend
+    command: ["python", "-m", "app.worker"]
+    environment:
+      <<: *backend_env
+      SCAMSHIELD_PROCESS_ROLE: worker
+    volumes: [uploads:/data/uploads]
+    depends_on:
+      api: {condition: service_healthy}   # the API applies migrations first
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      args: {BACKEND_URL: "http://api:8000"}
+    ports: ["3000:3000"]
+    depends_on:
+      api: {condition: service_healthy}
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  uploads:

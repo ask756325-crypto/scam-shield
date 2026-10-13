@@ -29,17 +29,19 @@ export default function ReviewPage() {
   const [levels, setLevels] = useState<string[]>(["critical", "high", "medium"]);
   const [source, setSource] = useState("");
   const [statusF, setStatusF] = useState<StatusFilter>("outstanding");
+  const [assignee, setAssignee] = useState("");
   const brandId = scope === "brand" ? selected?.id : undefined;
   const { data, error, loading, reload, setData } = useApi<Paged<Finding>>(scope === "all" || selected ? "/findings" : null, {
     brand_id: brandId,
     status: STATUSES[statusF],
     level: levels.length ? levels : [...LEVELS],
     source: source ? [source] : undefined,
+    assignee: assignee || undefined,
     sort: "risk",
     limit: 100,
   });
   const { data: summary, reload: reloadSummary } = useApi<Summary>("/findings/review-summary", { brand_id: brandId });
-  useEffect(() => setIdx(0), [scope, levels, source, statusF]);
+  useEffect(() => setIdx(0), [scope, levels, source, statusF, assignee]);
   const [idx, setIdx] = useState(0);
   const [detail, setDetail] = useState<Finding | null>(null);
   const [busy, setBusy] = useState(false);
@@ -132,12 +134,17 @@ export default function ReviewPage() {
         </div>
         <Select aria-label="Source" value={source} onChange={(e) => setSource(e.target.value)} className="h-8 w-auto text-[12.5px]">
           <option value="">All sources</option>
-          {["bluesky", "mastodon", "apple_app_store", "google_play"].map((x) => <option key={x} value={x}>{sourceLabel(x)}</option>)}
+          {["bluesky", "mastodon", "apple_app_store", "google_play", "youtube", "ct_domains"].map((x) => <option key={x} value={x}>{sourceLabel(x)}</option>)}
         </Select>
         <Select aria-label="Review status" value={statusF} onChange={(e) => setStatusF(e.target.value as StatusFilter)} className="h-8 w-auto text-[12.5px]">
           <option value="outstanding">Needs review + further review</option>
           <option value="open">Needs review</option>
           <option value="escalated">Further review only</option>
+        </Select>
+        <Select aria-label="Assignee" value={assignee} onChange={(e) => setAssignee(e.target.value)} className="h-8 w-auto text-[12.5px]">
+          <option value="">Anyone</option>
+          <option value="me">Assigned to me</option>
+          <option value="unassigned">Unassigned</option>
         </Select>
       </div>
       <div className="mb-3 flex flex-wrap items-center gap-3 text-[11.5px] text-ink-500">

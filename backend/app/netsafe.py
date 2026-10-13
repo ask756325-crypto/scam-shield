@@ -21,6 +21,9 @@ DEFAULT_IMAGE_HOST_SUFFIXES = (
     "play-lh.googleusercontent.com",
     "files.mastodon.social",
     "cdn.masto.host",
+    "yt3.ggpht.com",
+    "yt3.googleusercontent.com",
+    "i.ytimg.com",
 )
 MAX_REDIRECTS = 3
 

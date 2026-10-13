@@ -19,6 +19,12 @@ function messageFrom(data: unknown, status: number): string {
   return `Request failed (${status})`;
 }
 
+/** Set while the user is signing out, so a background request's 401 doesn't race the "signed out" redirect. */
+let signingOut = false;
+export function beginSignOut() {
+  signingOut = true;
+}
+
 type Opts = Omit<RequestInit, "body"> & { body?: unknown; query?: Record<string, string | number | boolean | string[] | undefined | null> };
 
 export function buildQuery(query?: Opts["query"]): string {
@@ -70,7 +76,7 @@ async function request<T>(path: string, opts: Opts): Promise<{ data: T; res: Res
   }
   if (!res.ok) {
     // Only bounce from inside the app: auth pages probe /auth/me and expect a silent 401 (no redirect loops).
-    if (res.status === 401 && typeof window !== "undefined" && window.location.pathname.startsWith("/app")) {
+    if (res.status === 401 && typeof window !== "undefined" && window.location.pathname.startsWith("/app") && !signingOut) {
       const expired = res.headers.get("X-Session-State") === "expired" ? "&reason=expired" : "";
       window.location.href = `/signin?next=${encodeURIComponent(window.location.pathname + window.location.search)}${expired}`;
     }

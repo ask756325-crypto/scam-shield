@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..db import get_db
+from ..services import audit as audit_log
 from ..deps import Principal, get_brand_for, get_principal
 from ..models import Brand, MonitoringSchedule
 from ..schemas import ScheduleIn
@@ -65,6 +66,9 @@ def put_schedule(brand_id: int, body: ScheduleIn, p: Principal = Depends(get_pri
     s.updated_by_id = p.user.id
     if brand.schedule is None:
         db.add(s)
+    audit_log.record(db, p, "schedule.saved", "brand", brand.id, f"Schedule for {brand.name}: {spec.frequency}",
+                     {"frequency": spec.frequency, "interval_hours": int(spec.interval_hours), "time_of_day": spec.time_of_day,
+                      "weekdays": spec.weekdays, "timezone": spec.timezone, "sources": sources})
     db.commit()
     db.refresh(s)
     return _out(s)
@@ -87,6 +91,8 @@ def _transition(brand_id: int, p: Principal, db: Session, target: str) -> dict:
     s.state = target
     s.version += 1
     s.updated_by_id = p.user.id
+    audit_log.record(db, p, f"schedule.{ {'active': 'resumed', 'paused': 'paused', 'disabled': 'disabled'}[target] }", "brand", brand.id,
+                     f"Schedule for {brand.name} {target}")
     db.commit()
     db.refresh(s)
     return _out(s)

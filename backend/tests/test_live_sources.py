@@ -200,3 +200,12 @@ def test_release_end_to_end_workflow_live(client):
     print(f"\nLEVELS {dict(levels)} TOP {top}")
     print(f"\nLIVE RELEASE CHECK scan1={s1['id']} sources={ {k: v['status'] for k, v in by.items()} } unique={s1['candidates_unique']} "
           f"excluded={s1['excluded_official']} findings={len(items)} scan2 changes={changes}")
+
+
+async def test_ct_domains_real_query():
+    """crt.sh is a free community service with frequent outages; when it is down this fails with the real error."""
+    from app.sources.ct_domains import CTDomainsAdapter
+
+    async with httpx.AsyncClient(timeout=60, headers=UA) as c:
+        recs = await CTDomainsAdapter().search("paypal", c)
+    assert all(r.kind == "domain" and "paypal" in r.external_id.replace("-", "").replace(".", "") for r in recs)

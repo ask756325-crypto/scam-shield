@@ -121,7 +121,7 @@ export default function ScansPage() {
           </Select>
           <Select aria-label="Source" value={source} onChange={(e) => setSource(e.target.value)} className="h-8 w-auto text-[12.5px]">
             <option value="">Any source</option>
-            {["bluesky", "mastodon", "apple_app_store", "google_play", "demo", "import"].map((s) => <option key={s} value={s}>{sourceLabel(s)}</option>)}
+            {["bluesky", "mastodon", "apple_app_store", "google_play", "youtube", "ct_domains", "demo", "import"].map((s) => <option key={s} value={s}>{sourceLabel(s)}</option>)}
           </Select>
           <Select aria-label="Source failures" value={failures} onChange={(e) => setFailures(e.target.value)} className="h-8 w-auto text-[12.5px]">
             <option value="">With or without failures</option>

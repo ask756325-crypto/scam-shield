@@ -36,6 +36,8 @@ PLATFORMS = {
     "mastodon": "Mastodon (fediverse)",
     "apple_app_store": "Apple App Store",
     "google_play": "Google Play",
+    "youtube": "YouTube",
+    "ct_domains": "Web domains (Certificate Transparency)",
     "demo": "Synthetic demo",
 }
 # ISO 3166-1 alpha-2 (storefront country for app-store searches).
@@ -53,7 +55,8 @@ def redact(text: str | None) -> str | None:
     """Defence in depth: strip configured secrets from any message before it is stored or returned."""
     if not text:
         return text
-    for token in get_settings().mastodon_tokens().values():
+    secrets_ = [*get_settings().mastodon_tokens().values(), get_settings().youtube_key()]
+    for token in secrets_:
         if token:
             text = text.replace(token, "[redacted]")
     return text
@@ -76,6 +79,8 @@ def config_problems(name: str, cfg: dict) -> list[str]:
         c = str(cfg.get("store_country", "")).lower()
         if c not in ISO_COUNTRIES:
             problems.append(f"Store country “{c}” is not an ISO 3166 country code")
+    if name == "youtube" and not get_settings().youtube_key():
+        problems.append("No API key: set SCAMSHIELD_YOUTUBE_API_KEY on the server")
     if name == "google_play" and importlib.util.find_spec("google_play_scraper") is None:
         problems.append("The google-play-scraper package is not installed on the server")
     return problems
@@ -95,6 +100,11 @@ def auth_status(name: str, cfg: dict) -> dict:
             else "Public access — no credentials required (optional token per instance)"
         return {"status": "configured" if any(c["configured"] for c in creds) else "not_required", "label": label, "credentials": creds,
                 "unused_tokens_for": unused}
+    if name == "youtube":
+        has = bool(get_settings().youtube_key())
+        return {"status": "configured" if has else "missing", "label": "API key configured on the server (SCAMSHIELD_YOUTUBE_API_KEY)" if has
+                else "API key required — set SCAMSHIELD_YOUTUBE_API_KEY on the server", "credentials": [{"instance": "googleapis.com", "configured": has,
+                "source": "environment (SCAMSHIELD_YOUTUBE_API_KEY)" if has else None}]}
     return {"status": "not_required", "label": "Public access — no credentials required", "credentials": []}
 
 

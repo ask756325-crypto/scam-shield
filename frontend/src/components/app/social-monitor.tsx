@@ -13,7 +13,7 @@ import { Avatar, ChangeBadge, PlatformGlyph, RiskBadge, SOURCE_STATUS_LABEL, Sou
 import { summarizeSourceError } from "./dashboard";
 import { useBrands, useScans } from "./providers";
 
-const SOCIAL = ["bluesky", "mastodon"] as const;
+const SOCIAL = ["bluesky", "mastodon", "youtube"] as const;
 const LEVELS = ["critical", "high", "medium", "low"] as const;
 const ACCOUNT_TYPES = ["fake_brand_page", "fake_profile", "scam_account", "lookalike_account"];
 const SIGNALS: { key: string; label: string }[] = [
@@ -320,7 +320,7 @@ export function SocialMonitor() {
           <div className="text-[11.5px] font-medium tracking-wide text-ink-500 uppercase">Monitor</div>
           <h1 className="text-[21px] font-semibold tracking-[-0.02em] text-ink-950">Social Monitoring</h1>
           <p className="mt-1 text-[13px] leading-relaxed text-ink-500">
-            Fake profiles, fake brand pages and scam accounts using {selected.name}’s identity on {selected.is_demo ? "synthetic Bluesky/Mastodon data" : "Bluesky and Mastodon"}. Official accounts are excluded by exact identifier before scoring. Scans are periodic searches, not a live stream.
+            Fake profiles, fake brand pages and scam accounts using {selected.name}’s identity on {selected.is_demo ? "synthetic Bluesky/Mastodon data" : "Bluesky, Mastodon and YouTube (when its API key is configured)"}. Official accounts are excluded by exact identifier before scoring. Scans are periodic searches, not a live stream.
           </p>
         </div>
         <Button
@@ -355,6 +355,7 @@ export function SocialMonitor() {
             <option value="">All platforms</option>
             <option value="bluesky">Bluesky</option>
             <option value="mastodon">Mastodon</option>
+            <option value="youtube">YouTube</option>
           </Select>
           <div role="group" aria-label="Risk level" className="flex gap-1">
             {LEVELS.map((l) => {

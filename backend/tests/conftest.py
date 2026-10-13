@@ -8,7 +8,9 @@ import pytest
 
 _TMP = Path(tempfile.mkdtemp(prefix="scamshield-test-"))
 os.environ["SCAMSHIELD_ENV"] = "test"
-os.environ["SCAMSHIELD_DATABASE_URL"] = f"sqlite:///{(_TMP / 'test.db').as_posix()}"
+# SQLite by default. To run the suite against PostgreSQL, point SCAMSHIELD_TEST_DATABASE_URL at an EMPTY database,
+# e.g. postgresql+psycopg://postgres@127.0.0.1:5433/scamshield_test
+os.environ["SCAMSHIELD_DATABASE_URL"] = os.environ.get("SCAMSHIELD_TEST_DATABASE_URL") or f"sqlite:///{(_TMP / 'test.db').as_posix()}"
 os.environ["SCAMSHIELD_UPLOAD_DIR"] = str(_TMP / "uploads")
 os.environ["SCAMSHIELD_SCHEDULER_ENABLED"] = "false"
 os.environ["SCAMSHIELD_AUTH_RATE_LIMIT_ATTEMPTS"] = "8"

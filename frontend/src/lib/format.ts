@@ -4,6 +4,9 @@ export const SOURCE_LABELS: Record<string, string> = {
   apple_app_store: "App Store",
   apple: "App Store",
   google_play: "Google Play",
+  youtube: "YouTube",
+  ct_domains: "Domains (CT logs)",
+  domain: "Web domain",
   demo: "Synthetic demo",
   import: "CSV import",
   x: "X",
@@ -91,6 +94,8 @@ export const DETECTION_TYPE_LABELS: Record<string, string> = {
   suspicious_app: "Suspicious app",
   lookalike_app: "Look-alike app",
   official_publisher_app: "Official publisher app",
+  phishing_domain: "Possible phishing domain",
+  lookalike_domain: "Look-alike domain",
   unrelated: "Unrelated",
 };
 

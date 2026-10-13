@@ -1,6 +1,6 @@
 "use client";
 
-import { AlertTriangle, CheckCircle2, Clock } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Clock, ShieldCheck } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useRef, useState } from "react";
@@ -10,6 +10,54 @@ import { api, ApiError } from "@/lib/api";
 import { safeNext } from "@/lib/redirect";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/** Second step of sign-in when the account has two-factor authentication on. */
+function SecondFactor({ challenge, onDone, onRestart }: { challenge: string; onDone: () => void; onRestart: () => void }) {
+  const [code, setCode] = useState("");
+  const [useRecovery, setUseRecovery] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    if (!code.trim()) return setError(useRecovery ? "Enter one of your recovery codes." : "Enter the 6-digit code from your authenticator app.");
+    setLoading(true);
+    try {
+      await api("/auth/login/2fa", { method: "POST", body: useRecovery ? { challenge, recovery_code: code } : { challenge, code } });
+      onDone();
+    } catch (err) {
+      setError((err as Error).message);
+      setLoading(false);
+      setCode("");
+    }
+  };
+  return (
+    <>
+      <h1 className="inline-flex items-center gap-2 text-[26px] font-semibold tracking-[-0.03em] text-ink-950"><ShieldCheck className="size-6 text-forest-600" /> Two-factor check</h1>
+      <p className="mt-1.5 text-[13.5px] text-ink-500">{useRecovery ? "Enter one of the recovery codes you saved when you turned on two-factor authentication. Each code works once." : "Enter the 6-digit code from your authenticator app."}</p>
+      {error && (
+        <div role="alert" className="mt-5 flex items-start gap-2.5 rounded-md border border-[#efcdc4] bg-crit-bg px-3.5 py-2.5 text-[12.5px] text-crit">
+          <AlertTriangle className="mt-0.5 size-4 shrink-0" />
+          <span>{error}</span>
+        </div>
+      )}
+      <form className="mt-6 space-y-4" onSubmit={submit} noValidate>
+        <Field label={useRecovery ? "Recovery code" : "Authentication code"} htmlFor="otp">
+          <Input id="otp" autoFocus autoComplete="one-time-code" inputMode={useRecovery ? "text" : "numeric"} maxLength={useRecovery ? 20 : 6}
+            placeholder={useRecovery ? "XXXXX-XXXXX" : "123456"} value={code}
+            onChange={(e) => setCode(useRecovery ? e.target.value.toUpperCase() : e.target.value.replace(/\D/g, ""))} />
+        </Field>
+        <Button type="submit" variant="primary" size="lg" className="w-full" loading={loading} disabled={loading}>Verify and sign in</Button>
+      </form>
+      <div className="mt-5 flex justify-between text-[12.5px]">
+        <button type="button" className="text-teal-700 hover:underline" onClick={() => { setUseRecovery((v) => !v); setCode(""); setError(null); }}>
+          {useRecovery ? "Use authenticator code" : "Use a recovery code"}
+        </button>
+        <button type="button" className="text-ink-500 hover:underline" onClick={onRestart}>Start over</button>
+      </div>
+    </>
+  );
+}
 
 function SignInForm() {
   const router = useRouter();
@@ -24,6 +72,7 @@ function SignInForm() {
   const [error, setError] = useState<ApiError | Error | null>(null);
   const [loading, setLoading] = useState(false);
   const [rememberDays, setRememberDays] = useState(30);
+  const [challenge, setChallenge] = useState<string | null>(null);
   const emailRef = useRef<HTMLInputElement>(null);
   const passwordRef = useRef<HTMLInputElement>(null);
 
@@ -46,7 +95,13 @@ function SignInForm() {
     if (passwordError) return passwordRef.current?.focus();
     setLoading(true);
     try {
-      await api("/auth/login", { method: "POST", body: { email, password, remember } });
+      const r = await api<{ two_factor_required?: boolean; challenge?: string }>("/auth/login", { method: "POST", body: { email, password, remember } });
+      if (r.two_factor_required && r.challenge) {
+        setChallenge(r.challenge);
+        setPassword("");
+        setLoading(false);
+        return;
+      }
       router.replace(next);
     } catch (err) {
       setError(err as Error);
@@ -60,6 +115,8 @@ function SignInForm() {
   };
 
   const status = (error as ApiError | null)?.status;
+
+  if (challenge) return <SecondFactor challenge={challenge} onDone={() => router.replace(next)} onRestart={() => { setChallenge(null); setError(null); }} />;
 
   return (
     <>

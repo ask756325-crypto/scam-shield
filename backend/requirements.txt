@@ -14,3 +14,4 @@ google-play-scraper==1.2.7
 python-multipart==0.0.20
 psycopg[binary]==3.2.9
 tzdata==2026.5
+alembic==1.14.1

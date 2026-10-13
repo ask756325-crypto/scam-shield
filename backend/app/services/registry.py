@@ -5,16 +5,22 @@ from ..models import Organization
 from ..sources.apple import AppleAppStoreAdapter
 from ..sources.base import SourceAdapter, SourceInfo
 from ..sources.bluesky import BlueskyAdapter
+from ..sources.ct_domains import CTDomainsAdapter
 from ..sources.demo import DemoAdapter
 from ..sources.google_play import GooglePlayAdapter
 from ..sources.mastodon import MastodonAdapter
+from ..sources.youtube import YouTubeAdapter
 
 LIVE_ADAPTERS: dict[str, type[SourceAdapter]] = {
     "bluesky": BlueskyAdapter,
     "mastodon": MastodonAdapter,
     "apple_app_store": AppleAppStoreAdapter,
     "google_play": GooglePlayAdapter,
+    "youtube": YouTubeAdapter,
+    "ct_domains": CTDomainsAdapter,
 }
+# Enabled for new organizations. YouTube needs an API key and CT search is slow, so both are opt-in.
+DEFAULT_ENABLED = ["bluesky", "mastodon", "apple_app_store", "google_play"]
 
 # Documented-but-not-integrated platforms, shown honestly in the Sources page.
 UNAVAILABLE_SOURCES = [
@@ -22,10 +28,11 @@ UNAVAILABLE_SOURCES = [
     {"name": "instagram", "label": "Instagram", "category": "social", "reason": "No public search API; Meta Graph API access requires app review. Not integrated."},
     {"name": "facebook", "label": "Facebook", "category": "social", "reason": "Page search requires approved Graph API permissions. Not integrated."},
     {"name": "tiktok", "label": "TikTok", "category": "social", "reason": "Research API is restricted to approved researchers. Not integrated."},
+    {"name": "telegram", "label": "Telegram", "category": "social", "reason": "Searching public channels needs a logged-in user session (MTProto); the Bot API cannot search. Not integrated."},
 ]
 
 DEFAULT_SOURCE_CONFIG = {
-    "enabled_sources": list(LIVE_ADAPTERS),
+    "enabled_sources": DEFAULT_ENABLED,
     "mastodon_instances": ["mastodon.social"],
     "store_country": "us",
 }

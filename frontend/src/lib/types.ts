@@ -71,7 +71,7 @@ export interface ScanChange {
 }
 
 export interface Candidate {
-  id: number; source: string; source_type: "live" | "simulated" | "imported"; kind: "account" | "app"; external_id: string;
+  id: number; source: string; source_type: "live" | "simulated" | "imported"; kind: "account" | "app" | "domain"; external_id: string;
   name: string; handle: string | null; url: string | null; description: string; avatar_url: string | null;
   publisher_name: string | null; publisher_id: string | null; external_links: string[]; metadata: Record<string, unknown>;
   provenance: Record<string, unknown>; first_observed_at: string; last_observed_at: string; source_created_at: string | null;
@@ -105,6 +105,7 @@ export interface RelatedGroup {
 export interface Finding {
   id: number; brand_id: number; brand_name: string | null; risk_score: number; risk_level: RiskLevel; classification: string;
   detection_type?: string | null;
+  assignee?: { id: number; name: string; email: string } | null;
   signal_scores?: Record<string, { score: number; evaluated: boolean; detail: string }>;
   not_evaluated?: string[];
   explanation: string; status: FindingStatus; change_state: ChangeState; corroborating_groups: string[];

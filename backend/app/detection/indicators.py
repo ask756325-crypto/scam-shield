@@ -90,6 +90,11 @@ def extract(c, official_domains: list[str] | None = None) -> list[Indicator]:
         if 9 <= len(digits) <= 15:
             add(Indicator("phone", digits, m.group(0).strip(), "description"))
 
+    if c.kind == "domain" and c.external_id:
+        host = c.external_id.lower()
+        dom = registrable_domain(host)
+        if dom not in GENERIC_HOSTS and not is_official_host(host, official_domains):
+            add(Indicator("domain", dom, dom, "hostname"))
     if c.kind == "account" and c.handle:
         local = (handle_local_part(c.handle, c.source) or "").lower()
         if len(local) >= 4:

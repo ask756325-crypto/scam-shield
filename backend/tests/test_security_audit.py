@@ -8,7 +8,8 @@ import pytest
 from app.main import app
 from conftest import CSRF, signup, wait_for_scan
 
-PUBLIC = {"/api/health", "/api/auth/config", "/api/auth/signup", "/api/auth/login", "/api/auth/session", "/api/auth/verify-email",
+PUBLIC = {"/api/health", "/api/health/ready", "/api/metrics",  # metrics: own bearer token (tested in test_ops)
+          "/api/auth/config", "/api/auth/signup", "/api/auth/login", "/api/auth/login/2fa", "/api/auth/session", "/api/auth/verify-email",
           "/api/auth/password-reset/request", "/api/auth/password-reset/confirm", "/api/auth/accept-invite", "/api/auth/logout",
           "/api/auth/invite/{token}", "/api/demo/assets/{name}"}
 

@@ -16,6 +16,7 @@ def user_out(u: User) -> dict:
     return {
         "id": u.id, "email": u.email, "name": u.name, "created_at": iso(u.created_at), "last_login_at": iso(u.last_login_at),
         "email_verified": u.email_verified_at is not None,
+        "two_factor_enabled": u.totp_enabled_at is not None,
     }
 
 
@@ -140,6 +141,7 @@ def finding_out(f: Finding, brand_name: str | None = None, detail: bool = False)
         "id": f.id, "brand_id": f.brand_id, "brand_name": brand_name, "risk_score": f.risk_score, "risk_level": f.risk_level,
         "classification": f.classification, "detection_type": f.detection_type, "explanation": f.explanation, "status": f.status, "change_state": f.change_state,
         "corroborating_groups": f.corroborating_groups or [], "first_seen_scan_id": f.first_seen_scan_id,
+        "assignee": {"id": f.assignee.id, "name": f.assignee.name, "email": f.assignee.email} if f.assignee_id and f.assignee else None,
         "last_seen_scan_id": f.last_seen_scan_id, "created_at": iso(f.created_at), "updated_at": iso(f.updated_at),
         "candidate": candidate_out(f.candidate),
     }

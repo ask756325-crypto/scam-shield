@@ -41,6 +41,8 @@ SOURCE_PLATFORM = {
     "mastodon": "mastodon",
     "apple_app_store": "apple",
     "google_play": "google_play",
+    "youtube": "youtube",
+    "ct_domains": "domain",
 }
 
 
@@ -82,6 +84,8 @@ EXCLUSION_RULES: list[dict] = [
      "description": "A Bluesky handle that is an official domain or its subdomain. Bluesky verifies domain handles via DNS or .well-known."},
     {"id": "mastodon_verified_link", "kind": "account", "default": True, "label": "Mastodon verified link",
      "description": "A Mastodon profile link to an official domain that the instance marked verified (rel=me back-link)."},
+    {"id": "official_domain", "kind": "domain", "default": True, "label": "Official domain",
+     "description": "A hostname that is an official domain or a subdomain the brand controls (shared hosting domains excluded)."},
     {"id": "official_app_id", "kind": "app", "default": True, "label": "Bundle / package ID",
      "description": "Same store and the exact bundle or package ID of an official app."},
     {"id": "official_track_id", "kind": "app", "default": True, "label": "Apple track ID",
@@ -117,6 +121,13 @@ class OfficialIndex:
         on = self.rules
         platform = platform_for(c)
         native_id = (c.metadata or {}).get("native_id") or c.external_id
+        if c.kind == "domain":
+            host = (c.external_id or "").lower()
+            if on.get("official_domain", True):
+                for d in self.domains:
+                    if domain_covers(host, d):
+                        return ExclusionMatch("official_domain", f"{host} ⊂ {d}")
+            return None
         if c.kind == "app":
             if on["official_app_id"] and (platform, (native_id or "").lower()) in self.app_ids:
                 return ExclusionMatch("official_app_id", f"{platform}:{native_id}")

@@ -40,8 +40,9 @@ class TZDateTime(TypeDecorator):
         return value
 
     def process_result_value(self, value, dialect):
-        if isinstance(value, datetime) and value.tzinfo is None:
-            value = value.replace(tzinfo=timezone.utc)
+        if isinstance(value, datetime):
+            # SQLite returns naive UTC; PostgreSQL returns the session time zone. Always hand back UTC.
+            value = value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
         return value
 
 
@@ -58,6 +59,8 @@ class Organization(Base):
     source_config: Mapped[dict] = mapped_column(JSON, default=dict)
     # Monitoring rules, e.g. {"resolve_after_misses": 2}.
     monitoring_config: Mapped[dict | None] = mapped_column(JSON, default=dict, nullable=True)
+    # Webhook alert channel: {"url": ..., "enabled": bool, "events": [...]}. The URL is a secret (it embeds a token).
+    notification_config: Mapped[dict | None] = mapped_column(JSON, default=dict, nullable=True)
     created_at: Mapped[datetime] = mapped_column(TZDateTime(), default=utcnow)
 
     memberships: Mapped[list[Membership]] = relationship(back_populates="organization", cascade="all, delete-orphan")
@@ -73,6 +76,12 @@ class User(Base):
     created_at: Mapped[datetime] = mapped_column(TZDateTime(), default=utcnow)
     last_login_at: Mapped[datetime | None] = mapped_column(TZDateTime(), nullable=True)
     email_verified_at: Mapped[datetime | None] = mapped_column(TZDateTime(), nullable=True)
+    # Two-factor authentication (TOTP). The secret authenticates the user, so it is never returned after setup.
+    totp_secret: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    totp_pending_secret: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    totp_enabled_at: Mapped[datetime | None] = mapped_column(TZDateTime(), nullable=True)
+    totp_last_step: Mapped[int | None] = mapped_column(Integer, nullable=True)  # replay protection
+    recovery_codes: Mapped[list | None] = mapped_column(JSON, nullable=True)  # sha256 hashes of unused codes
 
     memberships: Mapped[list[Membership]] = relationship(back_populates="user", cascade="all, delete-orphan")
 
@@ -320,6 +329,9 @@ class Finding(Base):
     change_state: Mapped[str] = mapped_column(String(20), default="new")  # new | changed | recurring | missing | resolved
     # Consecutive clean scans of the finding's source that did not observe it (reset when observed).
     missed_scans: Mapped[int] = mapped_column(Integer, default=0)
+    # Analyst responsible for reviewing this finding (optional).
+    assignee_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    assignee: Mapped[User | None] = relationship(foreign_keys=[assignee_id])
     first_seen_scan_id: Mapped[int | None] = mapped_column(ForeignKey("scans.id", ondelete="SET NULL"), nullable=True)
     last_seen_scan_id: Mapped[int | None] = mapped_column(ForeignKey("scans.id", ondelete="SET NULL"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(TZDateTime(), default=utcnow)
@@ -448,3 +460,101 @@ class SourceCheck(Base):
     rate_limit: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(TZDateTime(), default=utcnow)
+
+
+class NotificationPreference(Base):
+    """Per-user email alert preferences within one organization."""
+
+    __tablename__ = "notification_preferences"
+    __table_args__ = (UniqueConstraint("user_id", "organization_id"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    organization_id: Mapped[int] = mapped_column(ForeignKey("organizations.id", ondelete="CASCADE"), index=True)
+    email_new_critical: Mapped[bool] = mapped_column(Boolean, default=True)
+    email_new_high: Mapped[bool] = mapped_column(Boolean, default=False)
+    email_source_failure: Mapped[bool] = mapped_column(Boolean, default=True)
+    digest: Mapped[str] = mapped_column(String(10), default="off")  # off | daily
+    digest_hour: Mapped[int] = mapped_column(Integer, default=8)  # local hour 0-23
+    timezone: Mapped[str] = mapped_column(String(64), default="UTC")
+    last_digest_at: Mapped[datetime | None] = mapped_column(TZDateTime(), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(TZDateTime(), default=utcnow, onupdate=utcnow)
+
+
+class NotificationLog(Base):
+    """Every notification attempt and its real outcome (sent | logged | skipped | failed)."""
+
+    __tablename__ = "notification_log"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    organization_id: Mapped[int] = mapped_column(ForeignKey("organizations.id", ondelete="CASCADE"), index=True)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    channel: Mapped[str] = mapped_column(String(20))  # email | webhook
+    event: Mapped[str] = mapped_column(String(40))  # new_threat | source_failure | schedule_paused | digest | test
+    recipient: Mapped[str] = mapped_column(String(255), default="")  # masked
+    subject: Mapped[str] = mapped_column(String(300), default="")
+    status: Mapped[str] = mapped_column(String(20))
+    detail: Mapped[str] = mapped_column(Text, default="")
+    scan_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(TZDateTime(), default=utcnow, index=True)
+
+
+class AuditEvent(Base):
+    """Organization audit log: who changed what (configuration, access, data management, exports)."""
+
+    __tablename__ = "audit_events"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    organization_id: Mapped[int] = mapped_column(ForeignKey("organizations.id", ondelete="CASCADE"), index=True)
+    actor_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    actor_email: Mapped[str] = mapped_column(String(255), default="")  # kept if the user is later removed
+    action: Mapped[str] = mapped_column(String(60), index=True)  # e.g. sources.config_updated
+    target_type: Mapped[str] = mapped_column(String(40), default="")
+    target_id: Mapped[str] = mapped_column(String(64), default="")
+    summary: Mapped[str] = mapped_column(String(500), default="")
+    details: Mapped[dict] = mapped_column(JSON, default=dict)  # never contains secrets
+    ip: Mapped[str] = mapped_column(String(64), default="")
+    created_at: Mapped[datetime] = mapped_column(TZDateTime(), default=utcnow, index=True)
+
+
+class TakedownCase(Base):
+    """Tracks reporting a confirmed impersonation to the platform. ScamShield never files reports itself."""
+
+    __tablename__ = "takedown_cases"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    organization_id: Mapped[int] = mapped_column(ForeignKey("organizations.id", ondelete="CASCADE"), index=True)
+    finding_id: Mapped[int] = mapped_column(ForeignKey("findings.id", ondelete="CASCADE"), unique=True)
+    platform: Mapped[str] = mapped_column(String(40))
+    channel_label: Mapped[str] = mapped_column(String(200), default="")
+    channel_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default="draft")  # draft|reported|acknowledged|removed|rejected|withdrawn
+    reference: Mapped[str] = mapped_column(String(200), default="")  # platform ticket / case number
+    report_text: Mapped[str] = mapped_column(Text, default="")
+    events: Mapped[list] = mapped_column(JSON, default=list)  # [{at, status, note, user}]
+    verification: Mapped[str] = mapped_column(String(30), default="unknown")  # unknown | still_observed | not_observed | reappeared
+    verified_scan_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    verified_at: Mapped[datetime | None] = mapped_column(TZDateTime(), nullable=True)
+    created_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    reported_at: Mapped[datetime | None] = mapped_column(TZDateTime(), nullable=True)
+    closed_at: Mapped[datetime | None] = mapped_column(TZDateTime(), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(TZDateTime(), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(TZDateTime(), default=utcnow, onupdate=utcnow)
+
+
+class LoginChallenge(Base):
+    """A password-verified login waiting for its second factor. Short-lived, single-use, attempt-limited."""
+
+    __tablename__ = "login_challenges"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    remember: Mapped[bool] = mapped_column(Boolean, default=False)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    expires_at: Mapped[datetime] = mapped_column(TZDateTime())
+    created_at: Mapped[datetime] = mapped_column(TZDateTime(), default=utcnow)
+
+
+class RateLimitEvent(Base):
+    """One counted attempt for the shared (database-backed) rate limiter. Keys are hashed — no emails or IPs stored."""
+
+    __tablename__ = "rate_limit_events"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    key_hash: Mapped[str] = mapped_column(String(64), index=True)
+    at: Mapped[float] = mapped_column(Float, index=True)  # unix time

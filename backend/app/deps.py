@@ -19,6 +19,7 @@ class Principal:
     org: Organization
     role: str
     token: str
+    ip: str = ""
 
 
 def get_principal(request: Request, db: Session = Depends(get_db)) -> Principal:
@@ -29,7 +30,7 @@ def get_principal(request: Request, db: Session = Depends(get_db)) -> Principal:
     membership = db.scalar(select(Membership).where(Membership.user_id == session.user_id).order_by(Membership.id))
     if not membership:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "No organization membership")
-    return Principal(user=session.user, org=membership.organization, role=membership.role, token=token or "")
+    return Principal(user=session.user, org=membership.organization, role=membership.role, token=token or "", ip=client_ip(request))
 
 
 def require_owner(p: Principal = Depends(get_principal)) -> Principal:

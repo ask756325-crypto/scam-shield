@@ -25,3 +25,6 @@ Thumbs.db
 .next-e2e/
 test-results/
 playwright-report/
+
+# Docker deployment secrets
+.env
