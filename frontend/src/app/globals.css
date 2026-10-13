@@ -1,0 +1,169 @@
+@import "tailwindcss";
+
+/* ScamShield design tokens — graphite, warm paper, forest green, muted teal. */
+@theme {
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, monospace;
+  --font-display: var(--font-instrument-serif), ui-serif, Georgia, serif;
+
+  --color-ink-950: #0f1111;
+  --color-ink-900: #161819;
+  --color-ink-850: #1c1f20;
+  --color-ink-800: #232628;
+  --color-ink-700: #2f3335;
+  --color-ink-600: #4b5053;
+  --color-ink-500: #6a6f72;
+  --color-ink-400: #8e9396;
+  --color-ink-300: #b8bbbb;
+  --color-ink-200: #d9d7d0;
+  --color-ink-150: #e4e1da;
+  --color-ink-100: #ece9e2;
+  --color-ink-50: #f4f2ec;
+  --color-paper: #fbfaf6;
+
+  --color-forest-950: #0c2116;
+  --color-forest-900: #12301f;
+  --color-forest-800: #183e2a;
+  --color-forest-700: #1f4d3a;
+  --color-forest-600: #296148;
+  --color-forest-500: #3a7a5c;
+  --color-forest-200: #c6dccf;
+  --color-forest-100: #e0ebe4;
+  --color-forest-50: #eef4f0;
+
+  --color-teal-700: #2d675f;
+  --color-teal-600: #3b7c73;
+  --color-teal-500: #4c8c82;
+  --color-teal-400: #73a79d;
+  --color-teal-200: #c4dcd7;
+  --color-teal-100: #dfece9;
+
+  --color-crit: #a8321f;
+  --color-crit-bg: #f8e7e2;
+  --color-high: #b8580f;
+  --color-high-bg: #f9ecdf;
+  --color-med: #8f6a07;
+  --color-med-bg: #f6efd8;
+  --color-low: #50606a;
+  --color-low-bg: #e9ecec;
+
+  --radius-xs: 3px;
+  --radius-sm: 5px;
+  --radius-md: 7px;
+  --radius-lg: 10px;
+
+  --shadow-card: 0 1px 0 rgba(17, 19, 18, 0.03), 0 1px 2px rgba(17, 19, 18, 0.04);
+  --shadow-pop: 0 10px 30px -12px rgba(17, 19, 18, 0.28), 0 2px 6px rgba(17, 19, 18, 0.06);
+
+  --animate-fade-in: fade-in 220ms ease-out both;
+  --animate-rise: rise 420ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  --animate-shimmer: shimmer 1.4s linear infinite;
+  --animate-pulse-dot: pulse-dot 1.6s ease-in-out infinite;
+
+  @keyframes fade-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+  @keyframes rise {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: none; }
+  }
+  @keyframes shimmer {
+    from { background-position: -200% 0; }
+    to { background-position: 200% 0; }
+  }
+  @keyframes pulse-dot {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.35; }
+  }
+}
+
+:root {
+  color-scheme: light;
+}
+
+html {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+body {
+  background: var(--color-ink-50);
+  color: var(--color-ink-900);
+  font-family: var(--font-sans);
+  font-feature-settings: "cv11", "ss01";
+}
+
+::selection {
+  background: var(--color-teal-200);
+  color: var(--color-ink-950);
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-teal-500);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+.skeleton {
+  background: linear-gradient(90deg, var(--color-ink-100) 0%, var(--color-ink-50) 50%, var(--color-ink-100) 100%);
+  background-size: 200% 100%;
+  animation: var(--animate-shimmer);
+  border-radius: var(--radius-sm);
+}
+
+.scrollbar-thin {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-ink-200) transparent;
+}
+
+/* Grid texture used sparingly on marketing surfaces. */
+.grid-lines {
+  background-image:
+    linear-gradient(to right, rgba(255, 255, 255, 0.045) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(255, 255, 255, 0.045) 1px, transparent 1px);
+  background-size: 56px 56px;
+}
+
+/* Scroll reveal (see components/marketing/reveal.tsx). Hidden state only when JS is running. */
+html.js [data-reveal] {
+  transition: opacity 600ms cubic-bezier(0.2, 0.7, 0.2, 1), transform 600ms cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+html.js [data-reveal]:not([data-shown]) {
+  opacity: 0;
+  transform: translateY(14px);
+}
+
+html {
+  scroll-behavior: smooth;
+}
+[id] {
+  scroll-margin-top: 80px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html.js [data-reveal]:not([data-shown]) {
+    opacity: 1;
+    transform: none;
+  }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+.scrollbar-none {
+  scrollbar-width: none;
+}
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
+}
