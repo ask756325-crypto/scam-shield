@@ -28,7 +28,7 @@ class Settings(BaseSettings):
     # Public origin of the frontend, used to build password-reset links.
     frontend_origin: str = "http://localhost:3000"
     # Temporary public demo access. Keep disabled unless the deployment is intentionally a demo.
-    demo_mode: bool = False
+    demo_mode: bool = True
 
     # Outbound HTTP
     http_timeout_seconds: float = 12.0

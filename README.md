@@ -115,9 +115,9 @@ redeploying.
 Optional credentials such as SMTP, YouTube, Mastodon, and metrics tokens should be added as
 secrets in Render's environment settings, not committed to `render.yaml`.
 
-For a temporary demo deployment, set `SCAMSHIELD_DEMO_MODE=true` on the API. The sign-in page
-then shows **Continue as demo**, which creates a short-lived session for a synthetic Demo Analyst
-workspace. Leave this setting unset or `false` for any real deployment; the default is disabled.
+For this temporary demo deployment, `SCAMSHIELD_DEMO_MODE=true` enables **Continue as demo**.
+That button creates a short-lived session for a synthetic Demo Analyst workspace. Set this
+variable to `false` before using the application with real users.
 
 ---
 
