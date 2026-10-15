@@ -1,0 +1,38 @@
+services:
+  - type: web
+    name: scamshield-api
+    runtime: docker
+    plan: free
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    healthCheckPath: /api/health/ready
+    envVars:
+      - key: SCAMSHIELD_ENV
+        value: production
+      - key: SCAMSHIELD_DATABASE_URL
+        fromDatabase:
+          name: scamshield-db
+          property: connectionString
+      - key: SCAMSHIELD_FRONTEND_ORIGIN
+        value: https://scamshield-frontend.onrender.com
+      - key: SCAMSHIELD_SCHEDULER_ENABLED
+        value: "true"
+      - key: SCAMSHIELD_PROCESS_ROLE
+        value: api
+      - key: SCAMSHIELD_USER_AGENT
+        value: ScamShieldAI/1.0 (+https://scamshield-frontend.onrender.com)
+
+  - type: web
+    name: scamshield-frontend
+    runtime: node
+    plan: free
+    rootDir: ./frontend
+    buildCommand: npm ci --no-audit --no-fund && npm run build
+    startCommand: npm start
+    envVars:
+      - key: BACKEND_URL
+        value: https://scamshield-api.onrender.com
+
+databases:
+  - name: scamshield-db
+    plan: free

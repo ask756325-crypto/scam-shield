@@ -16,6 +16,10 @@ class Base(DeclarativeBase):
 
 
 def _make_engine(url: str) -> Engine:
+    if url.startswith("postgres://"):
+        url = "postgresql+psycopg://" + url.removeprefix("postgres://")
+    elif url.startswith("postgresql://"):
+        url = "postgresql+psycopg://" + url.removeprefix("postgresql://")
     kwargs: dict = {"pool_pre_ping": True}
     if url.startswith("sqlite"):
         kwargs["connect_args"] = {"check_same_thread": False, "timeout": 30}

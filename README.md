@@ -100,6 +100,23 @@ No API keys are required: every integrated source is public and unauthenticated.
 
 ---
 
+## Render deployment
+
+The repository includes [`render.yaml`](./render.yaml), which creates a free-tier PostgreSQL
+database, FastAPI API service, and Next.js frontend. The API runs the scheduler in-process so a
+separate paid background worker is not required for this deployment.
+
+In the Render Dashboard, choose **New → Blueprint**, connect this repository, and apply the
+Blueprint. The frontend is built with `BACKEND_URL=https://scamshield-api.onrender.com`, and
+proxies its same-origin `/api/*` requests to the API service. If the service names or domains are
+changed, update `BACKEND_URL` on the frontend and `SCAMSHIELD_FRONTEND_ORIGIN` on the API before
+redeploying.
+
+Optional credentials such as SMTP, YouTube, Mastodon, and metrics tokens should be added as
+secrets in Render's environment settings, not committed to `render.yaml`.
+
+---
+
 ## Scheduled monitoring (`backend/app/services/scheduler.py`, `app/worker.py`)
 
 Each brand can have one **monitoring schedule**, stored in the database (`monitoring_schedules`). It runs:
