@@ -73,14 +73,30 @@ function SignInForm() {
   const [loading, setLoading] = useState(false);
   const [rememberDays, setRememberDays] = useState(30);
   const [challenge, setChallenge] = useState<string | null>(null);
+  const [demoEnabled, setDemoEnabled] = useState(false);
   const emailRef = useRef<HTMLInputElement>(null);
   const passwordRef = useRef<HTMLInputElement>(null);
 
   // Already signed in (valid server session)? Go straight to the destination. A 401 here is expected and silent.
   useEffect(() => {
     api("/auth/me").then(() => router.replace(next)).catch(() => {});
-    api<{ remember_me_days: number }>("/auth/config").then((c) => setRememberDays(c.remember_me_days)).catch(() => {});
+    api<{ remember_me_days: number; demo_enabled?: boolean }>("/auth/config").then((c) => {
+      setRememberDays(c.remember_me_days);
+      setDemoEnabled(c.demo_enabled === true);
+    }).catch(() => {});
   }, [router, next]);
+
+  const demoSignIn = async () => {
+    setError(null);
+    setLoading(true);
+    try {
+      await api("/auth/demo-login", { method: "POST" });
+      router.replace(next);
+    } catch (err) {
+      setError(err as Error);
+      setLoading(false);
+    }
+  };
 
   const emailError = !email ? "Enter your email address." : !EMAIL_RE.test(email) ? "Enter a valid email address, like name@company.com." : null;
   const passwordError = !password ? "Enter your password." : null;
@@ -190,6 +206,11 @@ function SignInForm() {
         <Button type="submit" variant="primary" size="lg" className="w-full" loading={loading} disabled={loading}>
           {loading ? "Signing in…" : "Sign in"}
         </Button>
+        {demoEnabled && (
+          <Button type="button" variant="secondary" size="lg" className="w-full" loading={loading} disabled={loading} onClick={demoSignIn}>
+            Continue as demo
+          </Button>
+        )}
       </form>
 
       <p className="mt-7 border-t border-ink-150 pt-5 text-center text-[13px] text-ink-500">

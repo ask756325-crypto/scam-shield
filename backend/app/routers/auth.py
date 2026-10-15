@@ -87,6 +87,7 @@ def auth_config():
         "min_password_length": 10,
         "remember_me_days": s.session_ttl_hours // 24,
         "session_hours": s.short_session_ttl_hours,
+        "demo_enabled": s.demo_mode,
     }
 
 
@@ -130,6 +131,29 @@ def login(body: LoginIn, request: Request, response: Response, db: Session = Dep
         return {"two_factor_required": True, "challenge": challenge}
     token = create_session(db, user, request.headers.get("user-agent"), remember=body.remember)
     _set_cookie(response, token, remember=body.remember)
+    return _session_payload(db, user)
+
+
+@router.post("/demo-login")
+def demo_login(request: Request, response: Response, db: Session = Depends(get_db)):
+    """Create a short-lived session for the seeded demo workspace when explicitly enabled."""
+    s = get_settings()
+    if not s.demo_mode:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Demo access is disabled.")
+    _limit(f"demo-login:{client_ip(request)}")
+    email = "demo@scamshield.local"
+    user = db.scalar(select(User).where(User.email == email))
+    if not user:
+        user = User(email=email, name="Demo Analyst", password_hash=hash_password(secrets.token_urlsafe(32)))
+        org = Organization(name="ScamShield Demo", detection_config={}, source_config={})
+        db.add_all([user, org])
+        db.flush()
+        db.add(Membership(user_id=user.id, organization_id=org.id, role="owner"))
+        db.commit()
+    if not user.is_active:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Demo account is disabled.")
+    token = create_session(db, user, request.headers.get("user-agent"), remember=False)
+    _set_cookie(response, token, remember=False)
     return _session_payload(db, user)
 
 

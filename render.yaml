@@ -19,6 +19,8 @@ services:
         value: "true"
       - key: SCAMSHIELD_PROCESS_ROLE
         value: api
+      - key: SCAMSHIELD_DEMO_MODE
+        value: "true"
       - key: SCAMSHIELD_USER_AGENT
         value: ScamShieldAI/1.0 (+https://scamshield-frontend.onrender.com)
 
