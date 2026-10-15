@@ -117,6 +117,29 @@ secrets in Render's environment settings, not committed to `render.yaml`.
 
 ---
 
+## Vercel + Railway deployment
+
+As an alternative to Render, deploy the `frontend/` directory as a Next.js project on Vercel and
+deploy the `backend/` directory as a Docker service on Railway. The backend includes
+[`backend/railway.toml`](./backend/railway.toml), and the frontend includes
+[`frontend/vercel.json`](./frontend/vercel.json).
+
+On Railway, add a PostgreSQL service and set these API variables:
+
+```text
+SCAMSHIELD_ENV=production
+SCAMSHIELD_DATABASE_URL=${{Postgres.DATABASE_URL}}
+SCAMSHIELD_FRONTEND_ORIGIN=https://<your-vercel-domain>
+SCAMSHIELD_SCHEDULER_ENABLED=true
+SCAMSHIELD_PROCESS_ROLE=api
+```
+
+On Vercel, set `BACKEND_URL=https://<your-railway-api-domain>` before building. The Next.js
+rewrite keeps API calls same-origin in the browser, so session cookies continue to work. The
+Railway service must expose port `8000` and pass `/api/health/ready`.
+
+---
+
 ## Scheduled monitoring (`backend/app/services/scheduler.py`, `app/worker.py`)
 
 Each brand can have one **monitoring schedule**, stored in the database (`monitoring_schedules`). It runs:
